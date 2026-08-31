@@ -23,9 +23,12 @@ add_executable(WipeEngine WIN32
     src/FileFingerprint.cpp
     src/FeatureExtractor.h
     src/FeatureExtractor.cpp
+    src/SimilarityCalculator.cpp
+    src/SimilarityCalculator.h
     src/SimilarityEvaluator.cpp
     src/SimilarityEvaluator.h
     src/RecoverabilityEvaluator.cpp
+    src/RecoverabilityEvaluator.h
 )
 
 target_link_libraries(WipeEngine PRIVATE Qt6::Widgets)

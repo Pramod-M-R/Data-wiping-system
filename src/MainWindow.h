@@ -1,4 +1,5 @@
 #pragma once
+
 #include <QMainWindow>
 #include <QListWidget>
 #include <QPushButton>
@@ -7,54 +8,161 @@
 #include <QComboBox>
 #include <QTreeWidget>
 #include <QCheckBox>
-#include <QSplitter>
+#include <QGroupBox>
+
 #include <vector>
 #include <string>
+#include <cstdint>
 
-// Structure to track files to be wiped
-struct FileToWipe {
+#include "RecoverabilityEvaluator.h"
+
+
+// =====================================================
+// FILE INFORMATION USED FOR WIPING
+// =====================================================
+
+struct FileToWipe
+{
     std::string name;
     std::string fullPath;
-    unsigned long long sizeBytes;
-    bool isDeleted;
-    bool isDirectory;
+
+    unsigned long long sizeBytes = 0;
+
+    bool isDeleted = false;
+    bool isDirectory = false;
+
+
+    // Physical information for deleted files.
+
+    uint32_t startCluster = 0;
+
+    uint64_t dataOffset = 0;
+
+    uint64_t clusterSize = 0;
 };
 
-class MainWindow : public QMainWindow {
+
+// =====================================================
+// MAIN WINDOW
+// =====================================================
+
+class MainWindow : public QMainWindow
+{
     Q_OBJECT
+
 public:
-    MainWindow(QWidget *parent = nullptr);
+
+    explicit MainWindow(
+        QWidget *parent = nullptr
+    );
+
 
 private slots:
+
     void onRefreshClicked();
+
     void onScanClicked();
+
     void onWipeClicked();
-    void onToggleDeleted(bool show);
-    void onFileChecked(QTreeWidgetItem* item, int column);
+
+    void onToggleDeleted(
+        bool show
+    );
+
+    void onFileChecked(
+        QTreeWidgetItem *item,
+        int column
+    );
+
 
 private:
-    // Helper to collect checked files
-    void collectSelectedFiles(QTreeWidgetItem* item, 
-                             std::vector<FileToWipe>& selected);
 
-    // Device section
-    QListWidget   *driveList;
-    QPushButton   *refreshButton;
-    QLabel        *statusLabel;
+    // ================================================
+    // FILE SELECTION
+    // ================================================
 
-    // File tree section
-    QTreeWidget   *fileTree;
-    QPushButton   *scanButton;
-    QCheckBox     *showDeletedCheck;
-    QLabel        *scanStatusLabel;
+    void collectSelectedFiles(
+        QTreeWidgetItem *item,
+        std::vector<FileToWipe> &selected
+    );
 
-    // Wipe section
-    QComboBox     *wipeMethodCombo;
-    QPushButton   *wipeButton;
-    QProgressBar  *progressBar;
-    QLabel        *progressLabel;
-    
-    // Track current drive for file operations
-    std::string   currentDrivePath;
-    char          currentDriveLetter;
+
+    // ================================================
+    // ML EVALUATION GUI
+    // ================================================
+
+    void showMLEvaluation(
+        double similarity,
+        const RecoverabilityResult &result
+    );
+
+
+    // ================================================
+    // DEVICE SECTION
+    // ================================================
+
+    QListWidget *driveList = nullptr;
+
+    QPushButton *refreshButton = nullptr;
+
+    QLabel *statusLabel = nullptr;
+
+
+    // ================================================
+    // FILE SCANNER SECTION
+    // ================================================
+
+    QTreeWidget *fileTree = nullptr;
+
+    QPushButton *scanButton = nullptr;
+
+    QCheckBox *showDeletedCheck = nullptr;
+
+    QLabel *scanStatusLabel = nullptr;
+
+
+    // ================================================
+    // WIPE SECTION
+    // ================================================
+
+    QComboBox *wipeMethodCombo = nullptr;
+
+    QPushButton *wipeButton = nullptr;
+
+    QProgressBar *progressBar = nullptr;
+
+    QLabel *progressLabel = nullptr;
+
+
+    // ================================================
+    // ML EVALUATION SECTION
+    // ================================================
+
+    QGroupBox *mlEvaluationGroup = nullptr;
+
+
+    QLabel *similarityScoreLabel = nullptr;
+
+    QProgressBar *similarityProgressBar = nullptr;
+
+
+    QLabel *recoverabilityScoreLabel = nullptr;
+
+    QProgressBar *recoverabilityProgressBar = nullptr;
+
+
+    QLabel *riskLevelLabel = nullptr;
+
+    QLabel *recommendedMethodLabel = nullptr;
+
+    QLabel *recommendationLabel = nullptr;
+
+
+    // ================================================
+    // CURRENT DRIVE
+    // ================================================
+
+    std::string currentDrivePath;
+
+    char currentDriveLetter = '\0';
 };

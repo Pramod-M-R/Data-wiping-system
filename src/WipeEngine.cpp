@@ -355,15 +355,13 @@ if (method == WipeMethod::ZEROS)
     }
 }
 
-bool deleted = QFile::remove(filePath);
-
-    result.success = deleted;
+    // NOTE: Do not delete here. The caller may need to capture a post-wipe
+    // fingerprint before removing the file. Deletion is handled after the
+    // evaluation workflow is complete.
+    result.success = true;
     result.bytesWiped = fileSize;
     result.totalBytes = fileSize;
     result.passesCompleted = passes;
-
-    if (!deleted)
-        result.errorMessage = "File overwrite succeeded but deletion failed";
 
     return result;
 }
@@ -431,4 +429,168 @@ bool WipeEngine::verifyZeroPass(
     }
 
     return true;
+}
+
+WipeResult WipeEngine::wipeRawRegion(
+    const std::string& physicalPath,
+    unsigned long long byteOffset,
+    unsigned long long byteCount,
+    WipeMethod method,
+    std::function<void(int, int, int)> progressCallback)
+{
+    WipeResult result{};
+    result.success = false;
+    result.bytesWiped = 0;
+    result.totalBytes = byteCount;
+    result.passesCompleted = 0;
+
+    HANDLE hDrive = CreateFileA(
+        physicalPath.c_str(),
+        GENERIC_READ | GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        nullptr,
+        OPEN_EXISTING,
+        0,
+        nullptr
+    );
+
+    if (hDrive == INVALID_HANDLE_VALUE) {
+        result.errorMessage =
+            "Failed to open drive. Run as Administrator. Error: " +
+            std::to_string(GetLastError());
+
+        return result;
+    }
+
+    bool ok = false;
+
+    switch (method) {
+
+    case WipeMethod::ZEROS:
+
+        ok = writePass(
+            hDrive,
+            byteCount,
+            0x00,
+            false,
+            1,
+            1,
+            progressCallback,
+            byteOffset
+        );
+
+        result.passesCompleted = ok ? 1 : 0;
+        break;
+
+
+    case WipeMethod::RANDOM:
+
+        ok = writePass(
+            hDrive,
+            byteCount,
+            0x00,
+            true,
+            1,
+            1,
+            progressCallback,
+            byteOffset
+        );
+
+        result.passesCompleted = ok ? 1 : 0;
+        break;
+
+
+    case WipeMethod::DOD_3PASS:
+
+        ok = writePass(
+            hDrive,
+            byteCount,
+            0x00,
+            false,
+            1,
+            3,
+            progressCallback,
+            byteOffset
+        );
+
+        if (ok) {
+            result.passesCompleted = 1;
+
+            ok = writePass(
+                hDrive,
+                byteCount,
+                0xFF,
+                false,
+                2,
+                3,
+                progressCallback,
+                byteOffset
+            );
+        }
+
+        if (ok) {
+            result.passesCompleted = 2;
+
+            ok = writePass(
+                hDrive,
+                byteCount,
+                0x00,
+                true,
+                3,
+                3,
+                progressCallback,
+                byteOffset
+            );
+        }
+
+        if (ok)
+            result.passesCompleted = 3;
+
+        break;
+
+
+    case WipeMethod::DOD_7PASS:
+
+        ok = true;
+
+        for (int pass = 1; pass <= 7; ++pass) {
+
+            bool useRandom = (pass == 7);
+
+            unsigned char fill =
+                (pass % 2 == 0) ? 0xFF : 0x00;
+
+            if (!writePass(
+                    hDrive,
+                    byteCount,
+                    fill,
+                    useRandom,
+                    pass,
+                    7,
+                    progressCallback,
+                    byteOffset)) {
+
+                ok = false;
+                break;
+            }
+
+            result.passesCompleted = pass;
+        }
+
+        break;
+    }
+
+    CloseHandle(hDrive);
+
+    if (!ok) {
+        result.errorMessage =
+            "Failed while wiping raw disk region.";
+
+        return result;
+    }
+
+    result.success = true;
+    result.bytesWiped = byteCount;
+
+    return result;
 }

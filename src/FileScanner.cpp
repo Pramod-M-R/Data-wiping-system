@@ -174,14 +174,33 @@ std::vector<FileEntry> FileScanner::parseFAT32Deleted(HANDLE hDrive) {
         if (hasExt) fullName += "." + std::string(ext);
 
         FileEntry entry;
-        entry.name        = fullName;
-        entry.fullPath    = "[DELETED] " + fullName;
-        entry.sizeBytes   = entries[i].fileSize;
-        entry.lastModified = "Unknown";
-        entry.status      = FileStatus::DELETED;
-        entry.isDirectory = false;
+entry.name         = fullName;
+entry.fullPath     = "[DELETED] " + fullName;
+entry.sizeBytes    = entries[i].fileSize;
+entry.lastModified = "Unknown";
+entry.status       = FileStatus::DELETED;
+entry.isDirectory  = false;
 
-        results.push_back(entry);
+// Get the starting cluster of the deleted file
+uint32_t startCluster =
+    ((uint32_t)entries[i].clusterHigh << 16) |
+    entries[i].clusterLow;
+
+entry.startCluster = startCluster;
+
+// Calculate the physical byte offset of the cluster
+if (startCluster >= 2) {
+    entry.dataOffset =
+        dataStart +
+        (uint64_t)(startCluster - 2) * clusterSize;
+} else {
+    entry.dataOffset = 0;
+}
+
+// Store cluster size for later raw-data evaluation
+entry.clusterSize = clusterSize;
+
+results.push_back(entry);
     }
 
     return results;

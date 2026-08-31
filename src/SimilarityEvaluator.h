@@ -6,7 +6,7 @@ class SimilarityEvaluator
 {
 public:
     double calculateSimilarity(
-        const FileFingerprint& before,
-        const FileFingerprint& after
+        const FileFingerprint &before,
+        const FileFingerprint &after
     );
 };

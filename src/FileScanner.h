@@ -16,6 +16,11 @@ struct FileEntry {
     std::string lastModified;
     FileStatus status;
     bool isDirectory;
+
+    // Physical location information for deleted files
+    uint32_t startCluster = 0;
+    uint64_t dataOffset = 0;
+    uint64_t clusterSize = 0;
 };
 
 class FileScanner {

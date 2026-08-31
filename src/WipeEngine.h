@@ -40,6 +40,14 @@ public:
         std::function<void(int, int, int)> progressCallback
     );
 
+    WipeResult wipeRawRegion(
+    const std::string& physicalPath,
+    unsigned long long byteOffset,
+    unsigned long long byteCount,
+    WipeMethod method,
+    std::function<void(int, int, int)> progressCallback
+);
+
     WipeResult wipeFile(
     const QString& filePath,
     WipeMethod method

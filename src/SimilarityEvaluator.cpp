@@ -4,11 +4,14 @@
 #include <cmath>
 #include <vector>
 
+
 double SimilarityEvaluator::calculateSimilarity(
-    const FileFingerprint& before,
-    const FileFingerprint& after)
+    const FileFingerprint &before,
+    const FileFingerprint &after
+)
 {
-    std::vector<double> beforeFeatures = {
+    std::vector<double> beforeFeatures =
+    {
         before.entropy,
         before.meanByteValue,
         before.standardDeviation,
@@ -21,7 +24,9 @@ double SimilarityEvaluator::calculateSimilarity(
         before.chiSquare
     };
 
-    std::vector<double> afterFeatures = {
+
+    std::vector<double> afterFeatures =
+    {
         after.entropy,
         after.meanByteValue,
         after.standardDeviation,
@@ -34,31 +39,57 @@ double SimilarityEvaluator::calculateSimilarity(
         after.chiSquare
     };
 
+
     double totalSimilarity = 0.0;
 
-    for (size_t i = 0; i < beforeFeatures.size(); ++i) {
 
-        double maxValue = std::max(
-            std::abs(beforeFeatures[i]),
-            std::abs(afterFeatures[i])
-        );
+    for (
+        size_t i = 0;
+        i < beforeFeatures.size();
+        i++
+    )
+    {
+        double maxValue =
+            std::max(
+                std::abs(beforeFeatures[i]),
+                std::abs(afterFeatures[i])
+            );
+
 
         double similarity = 0.0;
 
-        if (maxValue == 0.0) {
+
+        if (maxValue == 0.0)
+        {
             similarity = 100.0;
-        } else {
+        }
+        else
+        {
             double difference =
-                std::abs(beforeFeatures[i] - afterFeatures[i]);
+                std::abs(
+                    beforeFeatures[i] -
+                    afterFeatures[i]
+                );
+
 
             similarity =
-                std::max(0.0,
-                    100.0 - (difference / maxValue) * 100.0
+                std::max(
+                    0.0,
+                    100.0 -
+                    (
+                        difference /
+                        maxValue
+                    ) * 100.0
                 );
         }
 
-        totalSimilarity += similarity;
+
+        totalSimilarity +=
+            similarity;
     }
 
-    return totalSimilarity / beforeFeatures.size();
+
+    return
+        totalSimilarity /
+        beforeFeatures.size();
 }

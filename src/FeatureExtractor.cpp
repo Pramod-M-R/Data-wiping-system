@@ -1,200 +1,324 @@
 #include "FeatureExtractor.h"
 
 #include <QFile>
+
 #include <array>
 #include <cmath>
 
-FileFingerprint FeatureExtractor::extractFeatures(const QString& filePath)
-{
-    FileFingerprint fingerprint;
 
+// =====================================================
+// EXTRACT FEATURES FROM A FILE
+// =====================================================
+
+FileFingerprint FeatureExtractor::extractFeatures(
+    const QString &filePath
+)
+{
     QFile file(filePath);
 
     if (!file.open(QIODevice::ReadOnly)) {
-        return fingerprint;
+        return FileFingerprint{};
     }
 
-    // Stores how many times each byte value (0–255) occurs.
-    std::array<unsigned long long, 256> frequency{};
-    
-    unsigned long long totalBytes = 0;
-    unsigned long long zeroBytes = 0;
-    unsigned long long ffBytes = 0;
-    unsigned long long printableBytes = 0;
-
-    double sum = 0.0;
-    double sumSquares = 0.0;
-
-    const qint64 chunkSize = 8192;
+    std::vector<uint8_t> data;
 
     while (!file.atEnd()) {
 
-        QByteArray chunk = file.read(chunkSize);
+        QByteArray chunk =
+            file.read(8192);
 
-        for (char character : chunk) {
+        for (char value : chunk) {
 
-            unsigned char byte =
-                static_cast<unsigned char>(character);
-
-            frequency[byte]++;
-            totalBytes++;
-
-            sum += byte;
-            sumSquares += byte * byte;
-
-            if (byte == 0x00)
-                zeroBytes++;
-
-            if (byte == 0xFF)
-                ffBytes++;
-
-            // Printable ASCII characters
-            if (byte >= 32 && byte <= 126)
-                printableBytes++;
+            data.push_back(
+                static_cast<uint8_t>(
+                    static_cast<unsigned char>(value)
+                )
+            );
         }
     }
 
     file.close();
 
-    if (totalBytes == 0) {
+    return extractFeaturesFromBytes(data);
+}
+
+
+// =====================================================
+// EXTRACT FEATURES FROM RAW BYTES
+// =====================================================
+
+FileFingerprint FeatureExtractor::extractFeaturesFromBytes(
+    const std::vector<uint8_t> &data
+)
+{
+    FileFingerprint fingerprint{};
+
+
+    if (data.empty()) {
         return fingerprint;
     }
 
-    // -------------------------
-    // 1. Mean byte value
-    // -------------------------
+
+    // -------------------------------------------------
+    // BYTE HISTOGRAM
+    // -------------------------------------------------
+
+    std::array<unsigned long long, 256>
+        byteCounts{};
+
+
+    unsigned long long nullCount = 0;
+
+    unsigned long long ffCount = 0;
+
+    unsigned long long printableCount = 0;
+
+
+    double byteSum = 0.0;
+
+    double squareSum = 0.0;
+
+
+    for (uint8_t value : data) {
+
+        byteCounts[value]++;
+
+        byteSum += value;
+
+        squareSum +=
+            static_cast<double>(value) *
+            static_cast<double>(value);
+
+
+        if (value == 0) {
+
+            nullCount++;
+
+        } else if (value == 0xFF) {
+
+            ffCount++;
+        }
+
+
+        if (value >= 32 &&
+            value <= 126) {
+
+            printableCount++;
+        }
+    }
+
+
+    const double totalBytes =
+        static_cast<double>(data.size());
+
+
+    // -------------------------------------------------
+    // MEAN BYTE VALUE
+    // -------------------------------------------------
+
     fingerprint.meanByteValue =
-        sum / totalBytes;
+        byteSum / totalBytes;
 
 
-    // -------------------------
-    // 2. Standard deviation
-    // -------------------------
+    // -------------------------------------------------
+    // STANDARD DEVIATION
+    // -------------------------------------------------
+
     double variance =
-        (sumSquares / totalBytes) -
-        (fingerprint.meanByteValue *
-         fingerprint.meanByteValue);
+        (squareSum / totalBytes)
+        -
+        (
+            fingerprint.meanByteValue *
+            fingerprint.meanByteValue
+        );
+
+
+    if (variance < 0.0) {
+
+        variance = 0.0;
+    }
+
 
     fingerprint.standardDeviation =
-        std::sqrt(std::max(0.0, variance));
+        std::sqrt(variance);
 
 
-    // -------------------------
-    // 3. Zero-byte percentage
-    // -------------------------
+    // -------------------------------------------------
+    // ZERO BYTE PERCENTAGE
+    // -------------------------------------------------
+
     fingerprint.zeroBytePercentage =
-        (static_cast<double>(zeroBytes) / totalBytes) * 100.0;
+        (
+            static_cast<double>(nullCount)
+            /
+            totalBytes
+        )
+        * 100.0;
 
 
-    // -------------------------
-    // 4. FF-byte percentage
-    // -------------------------
+    // -------------------------------------------------
+    // FF BYTE PERCENTAGE
+    // -------------------------------------------------
+
     fingerprint.ffBytePercentage =
-        (static_cast<double>(ffBytes) / totalBytes) * 100.0;
+        (
+            static_cast<double>(ffCount)
+            /
+            totalBytes
+        )
+        * 100.0;
 
 
-    // -------------------------
-    // 5. Printable-byte percentage
-    // -------------------------
+    // -------------------------------------------------
+    // PRINTABLE BYTE PERCENTAGE
+    // -------------------------------------------------
+
     fingerprint.printableBytePercentage =
-        (static_cast<double>(printableBytes) / totalBytes) * 100.0;
+        (
+            static_cast<double>(printableCount)
+            /
+            totalBytes
+        )
+        * 100.0;
 
 
-    // -------------------------
-    // 6. Unique-byte ratio
-    // -------------------------
-    int uniqueBytes = 0;
+    // -------------------------------------------------
+    // UNIQUE VALUES + DOMINANT BYTE
+    // -------------------------------------------------
+
+    int uniqueValues = 0;
+
+    unsigned long long maxCount = 0;
+
+    int minValue = 255;
+
+    int maxValue = 0;
+
 
     for (int i = 0; i < 256; i++) {
-        if (frequency[i] > 0)
-            uniqueBytes++;
+
+        if (byteCounts[i] > 0) {
+
+            uniqueValues++;
+
+
+            if (byteCounts[i] > maxCount) {
+
+                maxCount =
+                    byteCounts[i];
+            }
+
+
+            if (i < minValue) {
+
+                minValue = i;
+            }
+
+
+            if (i > maxValue) {
+
+                maxValue = i;
+            }
+        }
     }
+
 
     fingerprint.uniqueByteRatio =
-        (static_cast<double>(uniqueBytes) / 256.0) * 100.0;
+        (
+            static_cast<double>(uniqueValues)
+            /
+            256.0
+        )
+        * 100.0;
 
-
-    // -------------------------
-    // 7. Dominant-byte percentage
-    // -------------------------
-    unsigned long long dominantFrequency = 0;
-
-    for (int i = 0; i < 256; i++) {
-        dominantFrequency =
-            std::max(dominantFrequency, frequency[i]);
-    }
 
     fingerprint.dominantBytePercentage =
-        (static_cast<double>(dominantFrequency) /
-         totalBytes) * 100.0;
+        (
+            static_cast<double>(maxCount)
+            /
+            totalBytes
+        )
+        * 100.0;
 
 
-    // -------------------------
-    // 8. Byte range
-    // -------------------------
-    int minimumByte = 255;
-    int maximumByte = 0;
-
-    for (int i = 0; i < 256; i++) {
-
-        if (frequency[i] > 0) {
-
-            minimumByte =
-                std::min(minimumByte, i);
-
-            maximumByte =
-                std::max(maximumByte, i);
-        }
-    }
+    // -------------------------------------------------
+    // BYTE RANGE
+    // -------------------------------------------------
 
     fingerprint.byteRange =
-        maximumByte - minimumByte;
+        maxValue - minValue;
 
 
-    // -------------------------
-    // 9. Shannon entropy
-    // -------------------------
+    // -------------------------------------------------
+    // ENTROPY
+    // -------------------------------------------------
+
     double entropy = 0.0;
+
 
     for (int i = 0; i < 256; i++) {
 
-        if (frequency[i] > 0) {
+        if (byteCounts[i] == 0) {
 
-            double probability =
-                static_cast<double>(frequency[i]) /
-                totalBytes;
-
-            entropy -=
-                probability *
-                std::log2(probability);
+            continue;
         }
+
+
+        double probability =
+            static_cast<double>(
+                byteCounts[i]
+            )
+            /
+            totalBytes;
+
+
+        entropy -=
+            probability *
+            std::log2(probability);
     }
 
-    fingerprint.entropy = entropy;
+
+    fingerprint.entropy =
+        entropy;
 
 
-    // -------------------------
-    // 10. Chi-square statistic
-    // -------------------------
-    double expected =
-        static_cast<double>(totalBytes) / 256.0;
+    // -------------------------------------------------
+    // CHI-SQUARE
+    // -------------------------------------------------
+
+    double expectedCount =
+        totalBytes / 256.0;
+
 
     double chiSquare = 0.0;
 
-    if (expected > 0) {
+
+    if (expectedCount > 0.0) {
 
         for (int i = 0; i < 256; i++) {
 
             double difference =
-                frequency[i] - expected;
+                static_cast<double>(
+                    byteCounts[i]
+                )
+                -
+                expectedCount;
+
 
             chiSquare +=
-                (difference * difference) /
-                expected;
+                (
+                    difference *
+                    difference
+                )
+                /
+                expectedCount;
         }
     }
 
-    fingerprint.chiSquare = chiSquare;
+
+    fingerprint.chiSquare =
+        chiSquare;
+
 
     return fingerprint;
 }
