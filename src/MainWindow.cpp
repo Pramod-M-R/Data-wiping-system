@@ -1,4 +1,7 @@
 #include "MainWindow.h"
+#include "FeatureExtractor.h"
+#include "SimilarityEvaluator.h"
+#include "RecoverabilityEvaluator.h"
 #include "DeviceManager.h"
 #include "FileScanner.h"
 #include "WipeEngine.h"
@@ -463,7 +466,82 @@ void MainWindow::onWipeClicked() {
 
     QString qFilePath = QString::fromStdString(filePath);
 
-    auto result = engine.wipeFile(qFilePath, method);
+// Extract fingerprint before wiping
+FeatureExtractor extractor;
+FileFingerprint beforeFingerprint =
+    extractor.extractFeatures(qFilePath);
+
+// Perform secure wipe
+auto result = engine.wipeFile(qFilePath, method);
+
+if (result.success) {
+
+    FileFingerprint afterFingerprint =
+        extractor.extractFeatures(qFilePath);
+
+    SimilarityEvaluator similarityEvaluator;
+
+    double similarityScore =
+        similarityEvaluator.calculateSimilarity(
+            beforeFingerprint,
+            afterFingerprint
+        );
+
+    RecoverabilityEvaluator recoverabilityEvaluator;
+
+    RecoverabilityResult recoverabilityResult =
+        recoverabilityEvaluator.evaluate(
+            beforeFingerprint,
+            afterFingerprint,
+            similarityScore
+        );
+        QString riskText;
+
+switch (recoverabilityResult.riskLevel) {
+case RiskLevel::LOW:
+    riskText = "LOW";
+    break;
+case RiskLevel::MEDIUM:
+    riskText = "MEDIUM";
+    break;
+case RiskLevel::HIGH:
+    riskText = "HIGH";
+    break;
+}
+
+QString methodText;
+
+switch (recoverabilityResult.recommendedMethod) {
+case WipeMethod::ZEROS:
+    methodText = "Single Pass - Zeros";
+    break;
+case WipeMethod::DOD_3PASS:
+    methodText = "DoD 3-Pass";
+    break;
+case WipeMethod::DOD_7PASS:
+    methodText = "DoD 7-Pass";
+    break;
+}
+
+QMessageBox::information(
+    this,
+    "ML Evaluation Result",
+    QString(
+        "Similarity Score: %1%\n\n"
+        "Recoverability: %2%\n"
+        "Risk Level: %3\n"
+        "Recommended Method: %4\n\n"
+        "%5"
+    )
+    .arg(similarityScore, 0, 'f', 2)
+    .arg(recoverabilityResult.recoverabilityPercentage, 0, 'f', 2)
+    .arg(riskText)
+    .arg(methodText)
+    .arg(QString::fromStdString(
+        recoverabilityResult.recommendation
+    ))
+);
+}
 
     if (result.success) {
         wipedSize += result.bytesWiped;

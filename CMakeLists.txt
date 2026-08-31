@@ -6,7 +6,7 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
 
-set(CMAKE_PREFIX_PATH "C:/Qt/6.11.1/mingw_64")
+set(CMAKE_PREFIX_PATH "C:/Qt/6.11.2/mingw_64")
 
 find_package(Qt6 REQUIRED COMPONENTS Widgets)
 
@@ -19,6 +19,13 @@ add_executable(WipeEngine WIN32
     src/Logger.cpp
     src/CertificateGenerator.cpp
     src/app.rc
+    src/FileFingerprint.h
+    src/FileFingerprint.cpp
+    src/FeatureExtractor.h
+    src/FeatureExtractor.cpp
+    src/SimilarityEvaluator.cpp
+    src/SimilarityEvaluator.h
+    src/RecoverabilityEvaluator.cpp
 )
 
 target_link_libraries(WipeEngine PRIVATE Qt6::Widgets)
