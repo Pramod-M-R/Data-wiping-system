@@ -1,0 +1,9 @@
+{
+  "principles": [
+    "Execution completion and verification success are different claims.",
+    "Explain only the verification checks recorded by the application.",
+    "An empty signature scan does not prove permanent irrecoverability.",
+    "A certificate is a record of application-reported evidence, not a universal guarantee.",
+    "ML scores are estimates and must not be represented as guarantees."
+  ]
+}

@@ -6,9 +6,12 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
 
-set(CMAKE_PREFIX_PATH "C:/Qt/6.11.1/mingw_64")
+set(CMAKE_PREFIX_PATH "C:/Qt/6.11.2/mingw_64")
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Sql)
+
+# Keep the local, rule-based assistant beside the executable in build/assistant.
+file(COPY "${CMAKE_SOURCE_DIR}/assistant" DESTINATION "${CMAKE_BINARY_DIR}")
 
 add_executable(WipeEngine WIN32
     src/main.cpp
@@ -20,7 +23,21 @@ add_executable(WipeEngine WIN32
     src/CertificateGenerator.cpp
     src/FeatureExtractor.cpp
     src/RandomForest.cpp
+    src/AuthWindow.cpp
+    src/AuthService.cpp
+    src/DatabaseManager.cpp
+    src/PasswordHasher.cpp
+    src/ImageBackgroundWidget.cpp
+    resources.qrc
     src/app.rc
 )
 
-target_link_libraries(WipeEngine PRIVATE Qt6::Widgets)
+target_link_libraries(WipeEngine PRIVATE Qt6::Widgets Qt6::Sql bcrypt)
+
+# Sync the local Python assistant into the runtime folder on every build.
+add_custom_target(copy_assistant_runtime ALL
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_SOURCE_DIR}/assistant" "${CMAKE_BINARY_DIR}/assistant"
+    COMMENT "Copying DataGuard assistant runtime"
+)
+add_dependencies(WipeEngine copy_assistant_runtime)

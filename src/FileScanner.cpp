@@ -7,6 +7,7 @@
 #include <ctime>
 #include <algorithm>
 #include <unordered_set>
+#include <limits>
 // ─── Helpers ───────────────────────────────────────────────
 
 static std::string filetimeToString(FILETIME ft) {
@@ -551,10 +552,127 @@ if (entry.sizeBytes == 0) {
 }
 
 if (!chainValid) {
-    entry.isValid = false;
+    // A deleted FAT32 directory entry often retains file size and start cluster,
+    // while the FAT chain is cleared by the filesystem. Only infer a contiguous
+    // extent if every candidate cluster is inside the data region and FREE in
+    // every FAT copy. If any candidate is allocated or metadata is ambiguous,
+    // leave the file unavailable rather than risking an active file.
     entry.clusterChain.clear();
     entry.extents.clear();
     entry.dataOffset = 0;
+    entry.isValid = false;
+
+    std::unordered_set<uint32_t> claimedClusters;
+    for (const auto& priorEntry : results) {
+        if (priorEntry.isValid) {
+            for (uint32_t priorCluster : priorEntry.clusterChain)
+                claimedClusters.insert(priorCluster);
+        }
+    }
+
+    bool contiguousCandidate = entry.sizeBytes > 0 &&
+        startCluster >= 2 &&
+        startCluster <= maxDataCluster &&
+        expectedClusterCount > 0 &&
+        expectedClusterCount <= maxClusterVisits &&
+        expectedClusterCount <= maxDataCluster - startCluster + 1;
+
+    if (contiguousCandidate) {
+        const uint64_t candidateOffset =
+            dataStart + static_cast<uint64_t>(startCluster - 2) * clusterSize;
+        const uint64_t volumeBytes = totalSectors * bytesPerSector;
+        contiguousCandidate = candidateOffset <= volumeBytes &&
+            entry.sizeBytes <= volumeBytes - candidateOffset &&
+            expectedClusterCount * clusterSize >= entry.sizeBytes;
+        
+        bool allCandidateClustersFree = contiguousCandidate;
+        for (uint8_t fatCopy = 0;
+             allCandidateClustersFree && fatCopy < numFATs;
+             ++fatCopy) {
+            const uint64_t currentFatStart =
+                fatStart + static_cast<uint64_t>(fatCopy) * fatSizeBytes;
+            const uint64_t currentFatEnd = currentFatStart + fatSizeBytes;
+            uint64_t cachedSectorOffset = std::numeric_limits<uint64_t>::max();
+            std::vector<uint8_t> fatSector(bytesPerSector);
+
+            for (uint64_t clusterIndex = 0;
+                 clusterIndex < expectedClusterCount;
+                 ++clusterIndex) {
+                const uint64_t candidateCluster =
+                    static_cast<uint64_t>(startCluster) + clusterIndex;
+                const uint64_t fatEntryRelative = candidateCluster * sizeof(uint32_t);
+                if (candidateCluster > maxDataCluster ||
+                    claimedClusters.find(static_cast<uint32_t>(candidateCluster)) != claimedClusters.end() ||
+                    fatEntryRelative > fatSizeBytes - sizeof(uint32_t)) {
+                    allCandidateClustersFree = false;
+                    break;
+                }
+
+                const uint64_t fatEntryOffset = currentFatStart + fatEntryRelative;
+                const uint64_t sectorOffset =
+                    (fatEntryOffset / bytesPerSector) * bytesPerSector;
+                const uint64_t offsetInSector = fatEntryOffset - sectorOffset;
+
+                if (sectorOffset < currentFatStart ||
+                    sectorOffset > currentFatEnd - bytesPerSector ||
+                    offsetInSector > bytesPerSector - sizeof(uint32_t)) {
+                    allCandidateClustersFree = false;
+                    break;
+                }
+
+                if (sectorOffset != cachedSectorOffset) {
+                    LARGE_INTEGER fatPosition;
+                    fatPosition.QuadPart = static_cast<LONGLONG>(sectorOffset);
+                    DWORD fatBytesRead = 0;
+                    if (!SetFilePointerEx(hDrive, fatPosition, NULL, FILE_BEGIN) ||
+                        !ReadFile(hDrive, fatSector.data(), bytesPerSector,
+                                  &fatBytesRead, NULL) ||
+                        fatBytesRead != bytesPerSector) {
+                        allCandidateClustersFree = false;
+                        break;
+                    }
+                    cachedSectorOffset = sectorOffset;
+                }
+
+                uint32_t fatValue = 0;
+                memcpy(&fatValue, fatSector.data() + offsetInSector, sizeof(fatValue));
+                fatValue &= 0x0FFFFFFF;
+                if (fatValue != 0) {
+                    allCandidateClustersFree = false;
+                    break;
+                }
+            }
+        }
+
+        if (allCandidateClustersFree) {
+            uint64_t remainingBytes = entry.sizeBytes;
+            for (uint64_t clusterIndex = 0;
+                 clusterIndex < expectedClusterCount;
+                 ++clusterIndex) {
+                const uint32_t candidateCluster =
+                    static_cast<uint32_t>(static_cast<uint64_t>(startCluster) + clusterIndex);
+                const uint64_t extentOffset =
+                    dataStart + static_cast<uint64_t>(candidateCluster - 2) * clusterSize;
+                const uint64_t extentLength =
+                    std::min<uint64_t>(clusterSize, remainingBytes);
+                entry.clusterChain.push_back(candidateCluster);
+                entry.extents.push_back({extentOffset, extentLength});
+                claimedClusters.insert(candidateCluster);
+                remainingBytes -= extentLength;
+            }
+
+            if (remainingBytes == 0) {
+                entry.dataOffset = candidateOffset;
+                entry.isValid = true;
+                entry.extentMappingInferred = true;
+            } else {
+                entry.clusterChain.clear();
+                entry.extents.clear();
+                entry.dataOffset = 0;
+                entry.isValid = false;
+            }
+        }
+    }
 }
 
 results.push_back(entry);
@@ -565,84 +683,331 @@ results.push_back(entry);
 
 // ─── exFAT deleted file parser ─────────────────────────────
 
-std::vector<FileEntry> FileScanner::parseExFATDeleted(HANDLE hDrive) {
+std::vector<FileEntry> FileScanner::parseExFATDeleted(HANDLE hDrive)
+{
     std::vector<FileEntry> results;
 
-    // Read exFAT boot sector
     uint8_t boot[512] = {};
-    DWORD br = 0;
-    LARGE_INTEGER pos; pos.QuadPart = 0;
-    SetFilePointerEx(hDrive, pos, NULL, FILE_BEGIN);
-    ReadFile(hDrive, boot, 512, &br, NULL);
+    DWORD bytesRead = 0;
+    LARGE_INTEGER position{};
+    if (!SetFilePointerEx(hDrive, position, NULL, FILE_BEGIN) ||
+        !ReadFile(hDrive, boot, sizeof(boot), &bytesRead, NULL) ||
+        bytesRead != sizeof(boot)) {
+        return results;
+    }
 
-    uint32_t clusterHeapOffset = *(uint32_t*)(boot + 88);
-    uint32_t rootCluster       = *(uint32_t*)(boot + 96);
-    uint8_t  sectorShift       = *(uint8_t* )(boot + 108);
-    uint8_t  clusterShift      = *(uint8_t* )(boot + 109);
+    auto readU16 = [](const uint8_t* p) {
+        uint16_t value = 0;
+        memcpy(&value, p, sizeof(value));
+        return value;
+    };
+    auto readU32 = [](const uint8_t* p) {
+        uint32_t value = 0;
+        memcpy(&value, p, sizeof(value));
+        return value;
+    };
+    auto readU64 = [](const uint8_t* p) {
+        uint64_t value = 0;
+        memcpy(&value, p, sizeof(value));
+        return value;
+    };
 
-    uint64_t bytesPerSector  = 1ULL << sectorShift;
-    uint64_t bytesPerCluster = bytesPerSector << clusterShift;
-    uint64_t dataRegionStart = (uint64_t)clusterHeapOffset * bytesPerSector;
+    const uint64_t volumeLengthSectors = readU64(boot + 72);
+    const uint32_t fatOffsetSectors = readU32(boot + 80);
+    const uint32_t fatLengthSectors = readU32(boot + 84);
+    const uint32_t clusterHeapOffset = readU32(boot + 88);
+    const uint32_t clusterCount = readU32(boot + 92);
+    const uint32_t rootCluster = readU32(boot + 96);
+    const uint16_t volumeFlags = readU16(boot + 106);
+    const uint8_t sectorShift = boot[108];
+    const uint8_t clusterShift = boot[109];
+    const uint8_t numberOfFats = boot[110];
 
-    uint64_t rootOffset = dataRegionStart +
-                          (uint64_t)(rootCluster - 2) * bytesPerCluster;
+    if (sectorShift < 9 || sectorShift > 12 ||
+        clusterShift > 25 ||
+        static_cast<unsigned>(sectorShift) + clusterShift >= 32 ||
+        clusterCount == 0 || rootCluster < 2 ||
+        rootCluster > static_cast<uint64_t>(clusterCount) + 1 ||
+        fatLengthSectors == 0 ||
+        (numberOfFats != 1 && numberOfFats != 2) ||
+        volumeLengthSectors == 0) {
+        return results;
+    }
 
-    std::vector<uint8_t> clusterData(bytesPerCluster);
-    LARGE_INTEGER seekPos;
-    seekPos.QuadPart = (LONGLONG)rootOffset;
-    SetFilePointerEx(hDrive, seekPos, NULL, FILE_BEGIN);
-    ReadFile(hDrive, clusterData.data(), (DWORD)bytesPerCluster, &br, NULL);
+    const uint64_t bytesPerSector = 1ULL << sectorShift;
+    const uint64_t bytesPerCluster = bytesPerSector << clusterShift;
+    if (volumeLengthSectors > std::numeric_limits<uint64_t>::max() / bytesPerSector)
+        return results;
 
-    // In exFAT, entry type 0x00 or types < 0x80 = inactive (deleted)
+    const uint64_t volumeSizeBytes = volumeLengthSectors * bytesPerSector;
+    const uint64_t fatStart = static_cast<uint64_t>(fatOffsetSectors) * bytesPerSector;
+    const uint64_t fatSizeBytes = static_cast<uint64_t>(fatLengthSectors) * bytesPerSector;
+    const uint64_t dataRegionStart = static_cast<uint64_t>(clusterHeapOffset) * bytesPerSector;
+    const uint64_t maxCluster = static_cast<uint64_t>(clusterCount) + 1;
+    const uint32_t activeFat = (numberOfFats == 2) ? (volumeFlags & 1U) : 0U;
+
+    if (bytesPerCluster == 0 ||
+        bytesPerCluster > std::numeric_limits<DWORD>::max() ||
+        dataRegionStart >= volumeSizeBytes ||
+        static_cast<uint64_t>(clusterCount) >
+            (volumeSizeBytes - dataRegionStart) / bytesPerCluster ||
+        fatStart >= volumeSizeBytes ||
+        fatSizeBytes > volumeSizeBytes - fatStart ||
+        fatSizeBytes < sizeof(uint32_t) * (static_cast<uint64_t>(maxCluster) + 1) ||
+        static_cast<uint64_t>(activeFat + 1) * fatSizeBytes > volumeSizeBytes - fatStart) {
+        return results;
+    }
+
+    auto readFatEntry = [&](uint32_t clusterId, uint32_t& value) -> bool {
+        if (clusterId > maxCluster)
+            return false;
+        const uint64_t entryRelative = static_cast<uint64_t>(clusterId) * sizeof(uint32_t);
+        if (entryRelative > fatSizeBytes - sizeof(uint32_t))
+            return false;
+        const uint64_t entryOffset =
+            fatStart + static_cast<uint64_t>(activeFat) * fatSizeBytes + entryRelative;
+        if (entryOffset > volumeSizeBytes - sizeof(uint32_t))
+            return false;
+        LARGE_INTEGER entryPosition{};
+        entryPosition.QuadPart = static_cast<LONGLONG>(entryOffset);
+        if (!SetFilePointerEx(hDrive, entryPosition, NULL, FILE_BEGIN))
+            return false;
+        DWORD count = 0;
+        uint32_t rawValue = 0;
+        if (!ReadFile(hDrive, &rawValue, sizeof(rawValue), &count, NULL) ||
+            count != sizeof(rawValue))
+            return false;
+        value = rawValue;
+        return true;
+    };
+
+    // Walk the root directory's allocation chain, rather than looking only
+    // at its first cluster. New entries are commonly stored in later clusters.
+    std::vector<uint8_t> directoryData;
+    uint32_t currentRootCluster = rootCluster;
+    std::unordered_set<uint32_t> seenRootClusters;
+    bool rootReadValid = true;
+    for (uint64_t n = 0; n < clusterCount; ++n) {
+        if (currentRootCluster < 2 || currentRootCluster > maxCluster ||
+            !seenRootClusters.insert(currentRootCluster).second) {
+            rootReadValid = false;
+            break;
+        }
+
+        const uint64_t clusterOffset = dataRegionStart +
+            static_cast<uint64_t>(currentRootCluster - 2) * bytesPerCluster;
+        if (clusterOffset > volumeSizeBytes ||
+            bytesPerCluster > volumeSizeBytes - clusterOffset) {
+            rootReadValid = false;
+            break;
+        }
+
+        const size_t oldSize = directoryData.size();
+        if (bytesPerCluster > std::numeric_limits<size_t>::max() - oldSize) {
+            rootReadValid = false;
+            break;
+        }
+        directoryData.resize(oldSize + static_cast<size_t>(bytesPerCluster));
+        LARGE_INTEGER clusterPosition{};
+        clusterPosition.QuadPart = static_cast<LONGLONG>(clusterOffset);
+        DWORD clusterBytesRead = 0;
+        if (!SetFilePointerEx(hDrive, clusterPosition, NULL, FILE_BEGIN) ||
+            !ReadFile(hDrive, directoryData.data() + oldSize,
+                      static_cast<DWORD>(bytesPerCluster), &clusterBytesRead, NULL) ||
+            clusterBytesRead != bytesPerCluster) {
+            directoryData.resize(oldSize);
+            rootReadValid = false;
+            break;
+        }
+
+        uint32_t nextCluster = 0;
+        if (!readFatEntry(currentRootCluster, nextCluster)) {
+            rootReadValid = false;
+            break;
+        }
+        if (nextCluster >= 0xFFFFFFF8U && nextCluster <= 0xFFFFFFFFU)
+            break;
+        if (nextCluster < 2 || nextCluster == 0xFFFFFFF7U ||
+            (nextCluster >= 0xFFFFFFF0U && nextCluster <= 0xFFFFFFF6U) ||
+            nextCluster > maxCluster || seenRootClusters.find(nextCluster) != seenRootClusters.end()) {
+            rootReadValid = false;
+            break;
+        }
+        currentRootCluster = nextCluster;
+    }
+    if (!rootReadValid || directoryData.empty())
+        return results;
+
     size_t offset = 0;
-    while (offset + 32 <= clusterData.size()) {
-        uint8_t entryType = clusterData[offset];
+    while (offset + 32 <= directoryData.size()) {
+        const uint8_t entryType = directoryData[offset];
+        if (entryType == 0x00)
+            break;
+        if (entryType != 0x05) { // inactive/deleted primary File entry
+            offset += 32;
+            continue;
+        }
 
-        // Active file entry = 0x85, inactive = 0x05
-        if (entryType == 0x05) {
-            // This is a deleted file directory entry
-            // Next entry (offset+32) should be stream extension (0x40/0x00)
-            if (offset + 64 <= clusterData.size()) {
-                uint8_t streamType = clusterData[offset + 32];
+        const uint8_t secondaryCount = directoryData[offset + 1];
+        const size_t setSize = (static_cast<size_t>(secondaryCount) + 1U) * 32U;
+        if (secondaryCount < 2 || setSize > directoryData.size() - offset) {
+            offset += 32;
+            continue;
+        }
 
-                // Get file size from stream extension
-                uint64_t fileSize = 0;
-                if (streamType == 0x00 || streamType == 0x40) {
-                    fileSize = *(uint64_t*)(clusterData.data() + offset + 32 + 8);
-                }
+        const uint8_t* stream = nullptr;
+        std::vector<const uint8_t*> nameEntries;
+        for (size_t entryOffset = offset + 32;
+             entryOffset + 32 <= offset + setSize;
+             entryOffset += 32) {
+            const uint8_t* childEntry = directoryData.data() + entryOffset;
+            const uint8_t inactiveType = childEntry[0];
+            if (inactiveType == 0x40)
+                stream = childEntry;
+            else if (inactiveType == 0x41)
+                nameEntries.push_back(childEntry);
+        }
 
-                // Get filename from file name entry (offset+64), type 0x41/0x01
-                std::string fname = "[recovered]";
-                if (offset + 96 <= clusterData.size()) {
-                    uint8_t nameType = clusterData[offset + 64];
-                    if (nameType == 0x01 || nameType == 0x41) {
-                        // Unicode filename, up to 15 chars per entry
-                        wchar_t wname[16] = {};
-                        memcpy(wname, clusterData.data() + offset + 66, 30);
-                        char narrow[32] = {};
-                        WideCharToMultiByte(CP_ACP, 0, wname, -1,
-                                           narrow, sizeof(narrow),
-                                           NULL, NULL);
-                        fname = std::string(narrow);
-                    }
-                }
+        if (!stream) {
+            offset += setSize;
+            continue;
+        }
 
-                FileEntry entry;
-                entry.name        = fname;
-                entry.fullPath    = "[DELETED] " + fname;
-                entry.sizeBytes   = fileSize;
-                entry.lastModified = "Unknown";
-                entry.status      = FileStatus::DELETED;
-                entry.isDirectory = false;
-                results.push_back(entry);
+        const uint8_t streamFlags = stream[1];
+        const uint8_t nameLength = stream[3];
+        const uint32_t firstCluster = readU32(stream + 20);
+        const uint64_t dataLength = readU64(stream + 24);
+        const bool noFatChain = (streamFlags & 0x02U) != 0;
+
+        std::wstring wideName;
+        wideName.reserve(nameLength);
+        for (const uint8_t* nameEntry : nameEntries) {
+            for (size_t n = 0; n < 15 && wideName.size() < nameLength; ++n) {
+                const uint16_t codeUnit = readU16(nameEntry + 2 + n * sizeof(uint16_t));
+                if (codeUnit == 0)
+                    break;
+                wideName.push_back(static_cast<wchar_t>(codeUnit));
+            }
+            if (wideName.size() >= nameLength)
+                break;
+        }
+
+        std::string fileName = "[recovered]";
+        if (!wideName.empty()) {
+            const int needed = WideCharToMultiByte(CP_UTF8, 0, wideName.data(),
+                static_cast<int>(wideName.size()), NULL, 0, NULL, NULL);
+            if (needed > 0) {
+                fileName.resize(static_cast<size_t>(needed));
+                WideCharToMultiByte(CP_UTF8, 0, wideName.data(),
+                    static_cast<int>(wideName.size()), fileName.data(),
+                    needed, NULL, NULL);
             }
         }
-        offset += 32;
+
+        FileEntry entry{};
+        entry.name = fileName;
+        entry.fullPath = "[DELETED] " + fileName;
+        entry.sizeBytes = dataLength;
+        entry.lastModified = "Unknown";
+        entry.status = FileStatus::DELETED;
+        entry.isDirectory = false;
+        entry.isValid = false;
+        entry.startCluster = firstCluster;
+        entry.clusterSize = bytesPerCluster;
+        entry.dataRegionStart = dataRegionStart;
+
+        if (dataLength == 0) {
+            entry.isValid = true;
+            results.push_back(entry);
+            offset += setSize;
+            continue;
+        }
+
+        const uint64_t neededClusters =
+            dataLength / bytesPerCluster + (dataLength % bytesPerCluster != 0);
+        if (firstCluster < 2 || firstCluster > maxCluster ||
+            neededClusters == 0 || neededClusters > clusterCount ||
+            neededClusters > maxCluster - firstCluster + 1) {
+            results.push_back(entry);
+            offset += setSize;
+            continue;
+        }
+
+        uint64_t remainingBytes = dataLength;
+        uint32_t currentCluster = firstCluster;
+        std::unordered_set<uint32_t> visited;
+        bool chainValid = true;
+
+        for (uint64_t clusterIndex = 0; clusterIndex < neededClusters; ++clusterIndex) {
+            if (currentCluster < 2 || currentCluster > maxCluster ||
+                !visited.insert(currentCluster).second) {
+                chainValid = false;
+                break;
+            }
+
+            const uint64_t extentOffset =
+                dataRegionStart + static_cast<uint64_t>(currentCluster - 2) * bytesPerCluster;
+            const uint64_t extentLength = std::min<uint64_t>(bytesPerCluster, remainingBytes);
+            if (extentOffset > volumeSizeBytes ||
+                extentLength > volumeSizeBytes - extentOffset) {
+                chainValid = false;
+                break;
+            }
+
+            entry.extents.push_back({extentOffset, extentLength});
+            entry.clusterChain.push_back(currentCluster);
+            entry.clusters.push_back(currentCluster);
+            remainingBytes -= extentLength;
+            if (remainingBytes == 0)
+                break;
+
+            if (noFatChain) {
+                // The stream explicitly says this allocation is contiguous.
+                currentCluster = firstCluster + static_cast<uint32_t>(clusterIndex) + 1U;
+                continue;
+            }
+
+            uint32_t nextCluster = 0;
+            if (!readFatEntry(currentCluster, nextCluster)) {
+                chainValid = false;
+                break;
+            }
+            if (nextCluster >= 0xFFFFFFF8U && nextCluster <= 0xFFFFFFFFU) {
+                if (remainingBytes != 0)
+                    chainValid = false;
+                break;
+            }
+            if (nextCluster < 2 || nextCluster == 0xFFFFFFF7U ||
+                (nextCluster >= 0xFFFFFFF0U && nextCluster <= 0xFFFFFFF6U) ||
+                nextCluster > maxCluster ||
+                visited.find(nextCluster) != visited.end()) {
+                chainValid = false;
+                break;
+            }
+            currentCluster = nextCluster;
+        }
+
+        if (remainingBytes != 0)
+            chainValid = false;
+
+        if (chainValid) {
+            entry.isValid = true;
+            entry.dataOffset = dataRegionStart +
+                static_cast<uint64_t>(firstCluster - 2) * bytesPerCluster;
+        } else {
+            entry.extents.clear();
+            entry.clusterChain.clear();
+            entry.clusters.clear();
+            entry.dataOffset = 0;
+            entry.isValid = false;
+        }
+
+        results.push_back(entry);
+        offset += setSize;
     }
 
     return results;
 }
-
 std::vector<FileEntry> FileScanner::scanDeleted(const std::string& physicalPath)
 {
     std::vector<FileEntry> results;

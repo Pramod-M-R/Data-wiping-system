@@ -18,6 +18,9 @@ struct FileEntry {
     FileStatus status;
     bool isDirectory;
     bool isValid = true;
+    // True only when the original FAT chain was gone and a contiguous range
+    // was inferred after checking every candidate cluster is free in all FAT copies.
+    bool extentMappingInferred = false;
 
     uint32_t startCluster = 0;
     uint64_t dataOffset = 0;

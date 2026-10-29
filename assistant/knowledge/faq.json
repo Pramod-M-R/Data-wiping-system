@@ -1,0 +1,7 @@
+{
+  "greeting": "The DataGuard Assistant explains device and scan summaries, documented operation workflows, recorded errors, verification results, and certificates. It provides guidance only.",
+  "scan": "A deleted directory entry is a candidate for further inspection. It does not prove the original contents are intact or recoverable.",
+  "ml": "Machine-learning scores are estimates from the application's analysis pipeline. The assistant does not generate missing scores or treat estimates as guarantees.",
+  "certificate": "A certificate records the operation details supplied by the application. Its assurance depends on the actual wiping and verification checks recorded.",
+  "safety": "Wiping can destroy data. Always confirm the physical target and preserve any needed backup before using the normal application confirmation workflow."
+}

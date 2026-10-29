@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dataguard.local/schemas/response.schema.json",
+  "title": "DataGuard Assistant Response",
+  "type": "object",
+  "required": [
+    "request_id",
+    "answer",
+    "answer_type",
+    "caveats",
+    "suggested_navigation",
+    "requires_user_action",
+    "source"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "request_id": {
+      "type": "string",
+      "maxLength": 100
+    },
+    "answer": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000
+    },
+    "answer_type": {
+      "type": "string",
+      "maxLength": 80
+    },
+    "caveats": {
+      "type": "array",
+      "maxItems": 5,
+      "items": {
+        "type": "string",
+        "maxLength": 500
+      }
+    },
+    "suggested_navigation": {
+      "type": "array",
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "required": [
+          "label",
+          "destination"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "destination": {
+            "type": "string",
+            "enum": [
+              "dashboard",
+              "devices",
+              "scan_results",
+              "operations",
+              "activity_log",
+              "certificates",
+              "assistant",
+              "settings"
+            ]
+          }
+        }
+      }
+    },
+    "requires_user_action": {
+      "type": "boolean"
+    },
+    "source": {
+      "type": "string",
+      "const": "rule_based"
+    }
+  }
+}

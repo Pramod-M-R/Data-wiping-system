@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dataguard.local/schemas/request.schema.json",
+  "title": "DataGuard Assistant Request",
+  "type": "object",
+  "required": [
+    "question"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "request_id": {
+      "type": "string",
+      "maxLength": 100
+    },
+    "question": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000
+    },
+    "context": {
+      "type": "object",
+      "description": "Minimal metadata snapshot supplied by Qt. The context builder allowlists supported fields and discards unknown or sensitive values.",
+      "additionalProperties": true,
+      "properties": {
+        "screen": {
+          "type": "string",
+          "enum": [
+            "dashboard",
+            "devices",
+            "scan_results",
+            "operations",
+            "activity_log",
+            "certificates",
+            "assistant",
+            "settings"
+          ]
+        },
+        "selected_operation": {
+          "type": "object"
+        },
+        "signed_in_user": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "settings": {
+          "type": "object",
+          "properties": {
+            "signed_in_user": { "type": "string", "maxLength": 120 },
+            "persistence": { "type": "string", "maxLength": 80 },
+            "application_name": { "type": "string", "maxLength": 80 }
+          }
+        },
+        "device": {
+          "type": "object"
+        },
+        "devices": {
+          "type": "array",
+          "maxItems": 8,
+          "items": { "type": "object" }
+        },
+        "scan_summary": {
+          "type": "object"
+        },
+        "scan_entries": {
+          "type": "array",
+          "maxItems": 12,
+          "items": { "type": "object" }
+        },
+        "activity_records": {
+          "type": "array",
+          "maxItems": 8,
+          "items": { "type": "object" }
+        },
+        "certificate_records": {
+          "type": "array",
+          "maxItems": 5,
+          "items": { "type": "object" }
+        },
+        "last_recorded_operation": {
+          "type": "object"
+        },
+        "certificate": {
+          "type": "object"
+        }
+      }
+    }
+  }
+}
