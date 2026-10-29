@@ -16,6 +16,8 @@ _PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
     )),
     ("history_lookup", (
         r"\b(which|what)\s+(file|files|drive|drives|target|item|items)\b.{0,60}\b(did i|was|were|have i|have we)\b.{0,35}\b(wipe|wiped|erase|erased|delete|deleted)\b",
+        r"\b(name|identify|tell me|show me)\b.{0,50}\b(previously|previous|last|just)\b.{0,40}\b(wiped|erased|deleted|file|drive)\b",
+        r"\b(previously|previous|last|latest)\b.{0,35}\b(wiped|erased|deleted)\b.{0,35}\b(file|drive|file name|filename)\b",
         r"\b(who|which user)\b.{0,60}\b(wiped|erased|deleted|performed)\b",
         r"\b(result|outcome|status)\b.{0,30}\b(for|of)\b.{0,80}\b[a-z0-9_-]+\.[a-z0-9]{2,8}\b",
         r"\bwhat did i (just )?(wipe|erase|delete)\b",
@@ -53,7 +55,7 @@ _PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
         r"\b(devices?|drives?|usbs?|pendrives?|pen drives?|capacity|filesystems?|file systems?|connected)\b",
     )),
     ("ml_explanation", (
-        r"\b(ml|machine learning|similarity score|recoverability|risk level|prediction|recommendation)\b",
+        r"\b(ml|machine learning|similarity score|recoverability|risk level|prediction|recommendation|legacy result|hover|tooltip|tool tip|raw ml details)\b",
     )),
     ("operation_status", (
         r"\b(status|progress|last operation|last wipe|what happened|operation result|result of the wipe)\b",
