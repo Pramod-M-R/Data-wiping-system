@@ -1,6 +1,8 @@
 """Deterministic answers grounded in the current DataGuard snapshot."""
 from __future__ import annotations
 
+import re
+
 from typing import Any
 
 try:
@@ -39,10 +41,15 @@ def _format_operation(operation: dict[str, Any]) -> str:
     pieces = []
     labels = (
         ("file_name", "Target"),
-        ("method", "Method"),
-        ("status", "Recorded result"),
+        ("location", "Location"),
+        ("method", "Wipe method"),
+        ("outcome", "Recorded outcome"),
+        ("status", "Recorded status"),
         ("timestamp", "Recorded time"),
+        ("user", "Signed-in user"),
         ("verification", "Verification"),
+        ("ml_summary", "ML analysis"),
+        ("certificate_id", "Certificate ID"),
         ("error_message", "Error"),
     )
     for key, label in labels:
@@ -50,6 +57,127 @@ def _format_operation(operation: dict[str, Any]) -> str:
         if isinstance(value, str) and value.strip():
             pieces.append(f"{label}: {value.strip()}")
     return "\n".join(pieces)
+
+def _activity_records(context: dict[str, Any]) -> list[dict[str, Any]]:
+    values = context.get("activity_records", [])
+    if isinstance(values, list):
+        records = [item for item in values if isinstance(item, dict)]
+        if records:
+            return records[:30]
+    latest = _last_operation(context)
+    return [latest] if latest else []
+
+
+def _record_text(record: dict[str, Any]) -> str:
+    return " ".join(
+        str(record.get(key, ""))
+        for key in ("file_name", "location", "certificate_id", "error_message", "method", "outcome")
+    ).casefold()
+
+
+def _pick_relevant_record(question: str, records: list[dict[str, Any]]) -> dict[str, Any] | None:
+    if not records:
+        return None
+    tokens = re.findall(r"[a-z0-9][a-z0-9._-]+", question.casefold())
+    stop = {
+        "which", "what", "file", "files", "drive", "target", "item", "did", "do", "i",
+        "just", "wipe", "wiped", "wiping", "erase", "erased", "delete", "deleted", "the",
+        "my", "me", "was", "were", "have", "has", "who", "last", "latest", "recent",
+        "previous", "show", "list", "tell", "and", "or", "for", "from", "to", "in",
+        "activity", "log", "history", "operation", "operations", "result", "status",
+    }
+    needles = [token for token in tokens if token not in stop and len(token) >= 3]
+    if needles:
+        ranked: list[tuple[int, int, dict[str, Any]]] = []
+        for index, record in enumerate(records):
+            haystack = _record_text(record)
+            hits = sum(1 for token in needles if token in haystack)
+            if hits:
+                ranked.append((hits, -index, record))
+        if ranked:
+            ranked.sort(key=lambda row: (row[0], row[1]), reverse=True)
+            return ranked[0][2]
+    return records[0]
+
+
+def _format_history_record(record: dict[str, Any]) -> str:
+    fields = (
+        ("file_name", "File / drive"),
+        ("location", "Location"),
+        ("method", "Wipe method"),
+        ("outcome", "Outcome"),
+        ("timestamp", "Date and time"),
+        ("user", "Signed-in user"),
+        ("verification", "Verification"),
+        ("certificate_id", "Certificate ID"),
+    )
+    lines = []
+    for key, label in fields:
+        value = record.get(key)
+        if isinstance(value, str) and value.strip() and value.strip() != "—":
+            lines.append(f"{label}: {value.strip()}")
+    return "\n".join(lines)
+
+
+def _history_answer(question: str, context: dict[str, Any]) -> dict[str, Any]:
+    records = _activity_records(context)
+    if not records:
+        return _result(
+            "There are no wipe records available in the current Activity Log context, so I can't identify a file that was just wiped. Perform or review the operation in DataGuard, then refresh Activity Log and ask again.",
+            "history_lookup",
+            navigation=[_nav("Open Activity Log", "activity_log"), _nav("Open Certificates", "certificates")],
+        )
+
+    q = question.casefold()
+    wants_multiple = any(term in q for term in (
+        "files", "all", "list", "history", "activity log", "recent operations",
+        "recent wipes", "which ones", "what ones", "records",
+    ))
+    if wants_multiple:
+        entries = []
+        for index, record in enumerate(records[:5], start=1):
+            name = str(record.get("file_name", "")).strip() or "Target not recorded"
+            location = str(record.get("location", "")).strip()
+            outcome = str(record.get("outcome", record.get("status", "Outcome not recorded"))).strip()
+            timestamp = str(record.get("timestamp", "")).strip()
+            method = str(record.get("method", "")).strip()
+            line = f"{index}. {name}"
+            if location:
+                line += f" — {location}"
+            line += f"\n   {outcome}"
+            if method:
+                line += f" | {method}"
+            if timestamp:
+                line += f" | {timestamp}"
+            entries.append(line)
+        answer = "Here are the most recent records visible to the assistant from Activity Log, newest first:\n" + "\n".join(entries)
+        answer += "\n\nThis is a recent-history window, not necessarily the complete lifetime log."
+        return _result(
+            answer,
+            "history_lookup",
+            caveats=["Outcomes and verification are reported from the saved DataGuard activity records."],
+            navigation=[_nav("Open Activity Log", "activity_log"), _nav("Open Certificates", "certificates")],
+        )
+
+    selected = _pick_relevant_record(question, records)
+    if selected is None:
+        return _result("No matching activity record is available.", "history_lookup")
+    details = _format_history_record(selected)
+    if not details:
+        details = "The record exists, but the saved entry contains no readable file, time, or outcome details."
+    answer = "The most relevant recorded operation in Activity Log is:\n" + details
+    ml_summary = selected.get("ml_summary")
+    if any(term in q for term in ("ml", "similarity", "recoverability", "risk", "score")) and ml_summary:
+        answer += f"\nML analysis recorded for this operation:\n{ml_summary}"
+    answer += "\n\nI'm reading the saved activity record; I did not infer a wipe from the chat message."
+    return _result(
+        answer,
+        "history_lookup",
+        caveats=["A saved operation status and its verification result are different facts."],
+        navigation=[_nav("Open Activity Log", "activity_log"), _nav("Open Certificate", "certificates")],
+    )
+
+
 
 
 def answer_question(
@@ -79,6 +207,9 @@ def answer_question(
             navigation=[_nav("Devices", "devices"), _nav("Scan Results", "scan_results"), _nav("Certificates", "certificates")],
         )
 
+    if intent == "history_lookup":
+        return _history_answer(question, context)
+
     if intent == "destructive_request":
         return _result(
             "I cannot execute a wipe or recovery from chat. To continue safely, open Operations, confirm the selected USB drive and exact target, verify your backup, then use the application's normal confirmation dialog. If you are unsure about the target, cancel and review Scan Results first.",
@@ -89,6 +220,35 @@ def answer_question(
         )
 
     if intent == "device_info":
+        inventory = context.get("devices", [])
+        wants_inventory = any(term in q for term in (
+            "devices", "how many", "list", "all usb", "which usb", "connected drives",
+        ))
+        if wants_inventory and isinstance(inventory, list) and inventory:
+            descriptions = []
+            for item in inventory[:10]:
+                if not isinstance(item, dict):
+                    continue
+                name = str(item.get("display_name", "USB drive"))
+                letter = str(item.get("drive_letter", ""))
+                model = str(item.get("model", ""))
+                size = item.get("capacity_bytes")
+                detail = name
+                if letter and letter not in name:
+                    detail += f" ({letter})"
+                if model:
+                    detail += f" — {model}"
+                if isinstance(size, int):
+                    detail += f", {size / (1024 ** 3):.2f} GiB"
+                if item.get("selected"):
+                    detail += " [currently selected]"
+                descriptions.append(detail)
+            return _result(
+                "Removable devices reported by the current application snapshot:\n" + "\n".join(f"• {item}" for item in descriptions),
+                "device_inventory",
+                caveats=["Recheck the physical device identity before any destructive operation."],
+                navigation=[_nav("Open Devices", "devices")],
+            )
         if not isinstance(device, dict) or not device:
             return _result(
                 "No selected-device details are available in the current application context. Open Devices, refresh the device list, and select the intended drive. I won't assume a device is connected from an earlier message.",
@@ -152,6 +312,31 @@ def answer_question(
                 caveats.append(faq_scan)
         if "error" in scan:
             answer += f" Scanner message: {scan['error']}."
+        scan_entries = context.get("scan_entries", [])
+        wants_file_list = any(term in q for term in (
+            "which files", "what files", "list files", "show files", "file names",
+            "which entries", "what entries", "show me the files", "files found",
+        ))
+        if wants_file_list and isinstance(scan_entries, list) and scan_entries:
+            lines = []
+            for item in scan_entries[:10]:
+                if not isinstance(item, dict):
+                    continue
+                name = str(item.get("file_name", "")).strip()
+                if not name:
+                    continue
+                location = str(item.get("location", "")).strip()
+                status = str(item.get("status", "")).strip()
+                line = name
+                if status:
+                    line += f" [{status}]"
+                if location:
+                    line += f" — {location}"
+                lines.append(line)
+            if lines:
+                answer += "\n\nFiles and entries present in the current scan snapshot:\n" + "\n".join(f"• {line}" for line in lines)
+                if len(scan_entries) > len(lines):
+                    answer += "\nShowing only a subset of the scan entries."
         return _result(
             answer,
             "scan_explanation",
