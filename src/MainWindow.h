@@ -20,6 +20,7 @@ class QStackedWidget;
 class QToolButton;
 class QTableWidget;
 class QJsonObject;
+class QJsonArray;
 class QProcess;
 class QTimer;
 class QTextBrowser;
