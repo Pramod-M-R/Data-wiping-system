@@ -135,6 +135,9 @@ def _activity_record(source: Any) -> dict[str, Any]:
     passes = _count(source.get("passes"))
     if passes is not None:
         result["passes"] = passes
+    ml_details = _text(source.get("ml_details"), 1200)
+    if ml_details:
+        result["ml_details"] = ml_details
     for key in ("certificate_available",):
         if isinstance(source.get(key), bool):
             result[key] = source[key]
@@ -158,6 +161,9 @@ def _certificate(source: Any) -> dict[str, Any]:
     passes = _count(source.get("passes"))
     if passes is not None:
         result["passes"] = passes
+    ml_details = _text(source.get("ml_details"), 900)
+    if ml_details:
+        result["ml_details"] = ml_details
     if isinstance(source.get("pdf_ready"), bool):
         result["pdf_ready"] = source["pdf_ready"]
     return result
