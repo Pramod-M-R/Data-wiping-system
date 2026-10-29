@@ -151,7 +151,7 @@ def _history_answer(question: str, context: dict[str, Any]) -> dict[str, Any]:
             if timestamp:
                 line += f" | {timestamp}"
             entries.append(line)
-        answer = "Here are the most recent records visible to the assistant from Activity Log, newest first:\n" + "\n".join(entries)
+        answer = "Here are the relevant and recent records supplied by Activity Log. A record matching your filename or certificate ID may appear first:\n" + "\n".join(entries)
         answer += "\n\nThis is a recent-history window, not necessarily the complete lifetime log."
         return _result(
             answer,
@@ -450,7 +450,7 @@ def answer_question(
                     line += " — PDF ready" if pdf_ready else " — PDF unavailable or not verified"
                     lines.append(line)
                 return _result(
-                    "Recent certificate records supplied by DataGuard, newest first:\n" + "\n".join(f"• {line}" for line in lines),
+                    "Relevant and recent certificate records supplied by DataGuard:\n" + "\n".join(f"• {line}" for line in lines),
                     "certificate_list",
                     caveats=["Select a row in Certificates to ask for that certificate's full recorded details."],
                     navigation=[_nav("Open Certificates", "certificates")],
