@@ -71,7 +71,7 @@ def _activity_records(context: dict[str, Any]) -> list[dict[str, Any]]:
 def _record_text(record: dict[str, Any]) -> str:
     return " ".join(
         str(record.get(key, ""))
-        for key in ("file_name", "location", "certificate_id", "error_message", "method", "outcome")
+        for key in ("file_name", "location", "certificate_id", "error_message", "method", "outcome", "ml_summary", "ml_details")
     ).casefold()
 
 
@@ -167,9 +167,17 @@ def _history_answer(question: str, context: dict[str, Any]) -> dict[str, Any]:
     if not details:
         details = "The record exists, but the saved entry contains no readable file, time, or outcome details."
     answer = "The most relevant recorded operation in Activity Log is:\n" + details
-    ml_summary = selected.get("ml_summary")
-    if any(term in q for term in ("ml", "similarity", "recoverability", "risk", "score")) and ml_summary:
-        answer += f"\nML analysis recorded for this operation:\n{ml_summary}"
+    ml_summary = str(selected.get("ml_summary", "")).strip()
+    ml_details = str(selected.get("ml_details", "")).strip()
+    if any(term in q for term in (
+        "ml", "similarity", "recoverability", "risk", "score", "legacy", "hover", "tooltip", "recommendation",
+    )):
+        if ml_details:
+            answer += f"\nML details saved for this Activity Log record:\n{ml_details}"
+            if "legacy result" in ml_summary.casefold():
+                answer += "\nThis row is marked legacy; the values explain the old hover tooltip and are not a validated current evaluation."
+        elif ml_summary:
+            answer += f"\nML analysis recorded for this operation:\n{ml_summary}"
     answer += "\n\nI'm reading the saved activity record; I did not infer a wipe from the chat message."
     return _result(
         answer,
@@ -379,22 +387,45 @@ def answer_question(
             operation = relevant_operation
 
     if intent == "ml_explanation":
-        summary = operation.get("ml_summary", "")
-        if not summary:
-            summary = certificate.get("ml_summary", "") if isinstance(certificate, dict) else ""
-        if not summary:
+        summary = str(operation.get("ml_summary", "")).strip()
+        details = str(operation.get("ml_details", "")).strip()
+        if not summary and isinstance(certificate, dict):
+            summary = str(certificate.get("ml_summary", "")).strip()
+            details = details or str(certificate.get("ml_details", "")).strip()
+        if not summary and not details:
             return _result(
-                "No ML analysis summary was supplied for the current operation or selected certificate. I won't calculate or invent similarity or recoverability percentages. Open Activity Log or Certificates to inspect the recorded result.",
+                "No saved ML hover details were supplied for the relevant Activity Log record. I won't calculate or invent similarity or recoverability scores. Open Activity Log, hover over the ML analysis cell for that record, and check whether its stored tooltip contains details.",
                 "ml_explanation",
                 caveats=["ML scores are estimates and do not by themselves prove recoverability or permanent irrecoverability."],
                 navigation=[_nav("Open Activity Log", "activity_log"), _nav("Open Certificates", "certificates")],
             )
+
+        legacy = "legacy result" in summary.casefold()
+        if details:
+            if legacy:
+                answer = (
+                    "The Activity Log marks this entry as a LEGACY result. The underlying ML details saved for its hover tooltip are:\\n"
+                    f"{details}\\n\\n"
+                    "These are historical values, not a validated current ML evaluation. They can explain what the old tooltip displayed, "
+                    "but should not be presented as a current score. A new operation is needed for updated analysis."
+                )
+            else:
+                answer = (
+                    "The ML details saved with the relevant Activity Log record are:\\n"
+                    f"{details}\\n\\n"
+                    "These are application-recorded outputs from the operation, not an independent recalculation by the assistant."
+                )
+        else:
+            answer = f"Recorded ML summary from Activity Log:\\n{summary}"
+            if legacy:
+                answer += "\\nThis row is marked legacy; treat the summary as historical, not a validated current score."
+
         return _result(
-            f"Recorded ML summary:\n{summary}\n\nThese values are the application's recorded output, not an independent measurement by the assistant.",
+            answer,
             "ml_explanation",
             caveats=[
                 knowledge.get("faq", {}).get("ml", "Treat ML scores as estimates, not guarantees."),
-                "The assistant repeats the application's recorded result and does not independently calculate missing scores.",
+                "I report values stored in the application's audit record; I do not recalculate missing values.",
             ],
             navigation=[_nav("Open Activity Log", "activity_log"), _nav("Open Certificates", "certificates")],
         )
