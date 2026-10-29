@@ -38,11 +38,35 @@
         "selected_operation": {
           "type": "object"
         },
+        "signed_in_user": {
+          "type": "string",
+          "maxLength": 120
+        },
         "device": {
           "type": "object"
         },
+        "devices": {
+          "type": "array",
+          "maxItems": 8,
+          "items": { "type": "object" }
+        },
         "scan_summary": {
           "type": "object"
+        },
+        "scan_entries": {
+          "type": "array",
+          "maxItems": 12,
+          "items": { "type": "object" }
+        },
+        "activity_records": {
+          "type": "array",
+          "maxItems": 8,
+          "items": { "type": "object" }
+        },
+        "certificate_records": {
+          "type": "array",
+          "maxItems": 5,
+          "items": { "type": "object" }
         },
         "last_recorded_operation": {
           "type": "object"
