@@ -44,8 +44,8 @@
 #include <QPageSize>
 #include <QPageLayout>
 #include <map>
+#include <algorithm>
 #include <cmath>
-#include "RandomForest.h"
 #include <functional>
 #include <cstdint>
 #include <cstring>
@@ -307,6 +307,38 @@ int passesForMethod(int methodIndex)
 {
     return methodIndex == 0 ? 1 : (methodIndex == 1 ? 3 : 7);
 }
+double calculateFeatureSimilarity(const FeatureVector& before, const FeatureVector& after)
+{
+    const double beforeValues[] = {
+        before.entropy, before.meanByteValue, before.standardDeviation,
+        before.zeroBytePercentage, before.ffBytePercentage,
+        before.printableBytePercentage, before.uniqueByteRatio,
+        before.dominantBytePercentage, before.byteRange, before.chiSquare
+    };
+    const double afterValues[] = {
+        after.entropy, after.meanByteValue, after.standardDeviation,
+        after.zeroBytePercentage, after.ffBytePercentage,
+        after.printableBytePercentage, after.uniqueByteRatio,
+        after.dominantBytePercentage, after.byteRange, after.chiSquare
+    };
+    // Normalization bounds: entropy, byte means/deviation, percentages,
+    // unique-byte ratio, range. Chi-square is normalized to the observations.
+    const double ranges[] = {8.0, 255.0, 128.0, 100.0, 100.0,
+                             100.0, 1.0, 100.0, 255.0, 1.0};
+    constexpr int count = 10;
+    double totalNormalizedDifference = 0.0;
+    for (int i = 0; i < count; ++i) {
+        const double a = beforeValues[i];
+        const double b = afterValues[i];
+        if (!std::isfinite(a) || !std::isfinite(b))
+            return 0.0;
+        const double scale = (i == count - 1)
+            ? std::max({1.0, std::abs(a), std::abs(b)}) : ranges[i];
+        totalNormalizedDifference += std::min(1.0, std::abs(a - b) / scale);
+    }
+    return std::max(0.0, std::min(1.0, 1.0 - totalNormalizedDifference / count));
+}
+
 
 }
 
@@ -1069,7 +1101,16 @@ void MainWindow::onWipeClicked() {
 
         for (size_t i = 0; i < selectedFiles.size(); i++) {
             auto& file = selectedFiles[i];
-            
+
+            // Clear per-file outputs to prevent results from a previous file leaking into this record.
+            similarityScore = 0.0;
+            similarityScoreFile.clear();
+            featureDifferences.erase(file.name);
+            mlInputVectors.erase(file.name);
+            beforeFingerprints.erase(file.name);
+            afterFingerprints.erase(file.name);
+            mlDataset.erase(file.name);
+
             progressLabel->setText(
                 QString("Wiping file %1 of %2: %3")
                     .arg(i + 1).arg(selectedFiles.size())
@@ -1310,109 +1351,15 @@ sample.wipeMethod = methodIndex;
 
 mlDataset[file.name] = sample;
 
-similarityTrainingData.push_back(sample.differences);
-
-double similarityLabel = 0.0;
-
-if (sample.beforeFeatures.size() == sample.afterFeatures.size() &&
-    !sample.beforeFeatures.empty()) {
-
-    double totalDifference = 0.0;
-
-    for (size_t j = 0; j < sample.beforeFeatures.size(); ++j) {
-        totalDifference +=
-            std::abs(sample.beforeFeatures[j] -
-                     sample.afterFeatures[j]);
-    }
-
-    similarityLabel = 1.0 / (1.0 + totalDifference);
-}
-
-similarityTrainingLabels.push_back(similarityLabel);
-if (!similarityTrainingData.empty() &&
-    similarityTrainingData.size() == similarityTrainingLabels.size()) {
-    similarityModelTrained = true;
-}
-similarityModelEvaluated = similarityModelTrained;
-similarityModelSaved = similarityModelEvaluated;
-if (similarityModelSaved && !similarityTrainingLabels.empty()) {
-    similarityScore = similarityTrainingLabels.back();
-}
+// The score is derived from the measured BEFORE/AFTER feature vectors.
+// This is a feature-similarity metric, not a trained ML prediction.
+similarityScore = calculateFeatureSimilarity(before, afterFeatures);
 similarityScoreFile = file.name;
-recoverabilityTrainingData.push_back(sample.differences);
 
-double recoverabilityLabel =
-    sample.actualRecovery ? 1.0 : 0.0;
+// Keep the measured sample for diagnostics. Do not label it recoverable or
+// unrecoverable without an observed recovery result from a controlled test.
+mlDataset[file.name] = sample;
 
-recoverabilityTrainingLabels.push_back(recoverabilityLabel);
-RandomForest recoverabilityForest(50, 6, 2);
-
-if (!recoverabilityTrainingData.empty() &&
-    recoverabilityTrainingData.size() ==
-        recoverabilityTrainingLabels.size()) {
-
-    recoverabilityForest.train(
-        recoverabilityTrainingData,
-        recoverabilityTrainingLabels
-    );
-
-    recoverabilityModelTrained =
-        recoverabilityForest.isTrained();
-
-    recoverabilityModelEvaluated =
-        recoverabilityModelTrained;
-        recoverabilityModelSaved =
-    recoverabilityModelEvaluated;
-
-    if (recoverabilityModelSaved &&
-    !recoverabilityTrainingData.empty()) {
-
-    RandomForest recoverabilityScoreForest(50, 6, 2);
-
-    recoverabilityScoreForest.train(
-        recoverabilityTrainingData,
-        recoverabilityTrainingLabels
-    );
-
-    if (recoverabilityScoreForest.isTrained()) {
-        recoverabilityScore =
-            recoverabilityScoreForest.predict(
-                recoverabilityTrainingData.back()
-            );
-
-        recoverabilityScoreGenerated = true;
-
-        if (recoverabilityScoreGenerated) {
-    recoverabilityScore =
-        std::max(0.0, std::min(1.0, recoverabilityScore));
-}
-
-if (recoverabilityScoreGenerated) {
-    if (recoverabilityScore < mediumRiskThreshold) {
-        riskLevel = 0;   // LOW
-    }
-    else if (recoverabilityScore < highRiskThreshold) {
-        riskLevel = 1;   // MEDIUM
-    }
-    else {
-        riskLevel = 2;   // HIGH
-    }
-}
-if (recoverabilityScoreGenerated) {
-    if (riskLevel == 0) {
-        wipeRecommendation = "Single Pass / Zero";
-    }
-    else if (riskLevel == 1) {
-        wipeRecommendation = "DoD 3-Pass";
-    }
-}
-else if (riskLevel == 2) {
-    wipeRecommendation = "DoD 7-Pass";
-}
-    }
-}
-
-}
 } else {
     QMessageBox::warning(
         this,
@@ -1424,41 +1371,28 @@ else if (riskLevel == 2) {
 }
 
 const QString deletedAuditPath = auditPathForFile(file, drive.letter);
-QString deletedMlResults = QStringLiteral("ML analysis was not available for this operation.");
+QStringList mlDetails;
 if (!afterRead.success) {
-    deletedMlResults = QStringLiteral("ML analysis unavailable because DataGuard could not read the wiped data for analysis.");
+    mlDetails << QStringLiteral("Similarity score: Not available (post-wipe feature extraction failed)");
 } else if (similarityScoreFile == file.name) {
-    QStringList details;
-    details << QStringLiteral("Similarity score: %1% (before/after feature comparison)")
+    mlDetails << QStringLiteral("Similarity score: %1% (normalized before/after feature comparison)")
         .arg(similarityScore * 100.0, 0, 'f', 2);
-    if (recoverabilityScoreGenerated) {
-        const QString risk = riskLevel == 0 ? QStringLiteral("Low")
-            : (riskLevel == 1 ? QStringLiteral("Medium") : QStringLiteral("High"));
-        const QString nextMethod = riskLevel == 0 ? QStringLiteral("Single pass (zero fill)")
-            : (riskLevel == 1 ? QStringLiteral("Three passes (DoD)") : QStringLiteral("Seven passes (DoD)"));
-        details << QStringLiteral("Recoverability score: %1%")
-            .arg(recoverabilityScore * 100.0, 0, 'f', 2);
-        details << QStringLiteral("Recoverability risk: %1").arg(risk);
-        details << QStringLiteral("Recommended next wipe method: %1").arg(nextMethod);
-    } else {
-        details << QStringLiteral("Recoverability score: Not available");
-        details << QStringLiteral("Recoverability risk: Not available");
-        details << QStringLiteral("Recommended next wipe method: Not available");
-    }
-    details << QStringLiteral("Note: ML scores are estimates, not guarantees.");
-    deletedMlResults = details.join(QStringLiteral("\n"));
 } else {
-    deletedMlResults = QStringLiteral("ML analysis unavailable because the model did not return a result for this file.");
+    mlDetails << QStringLiteral("Similarity score: Not available for this file");
 }
+mlDetails << QStringLiteral("Recoverability score: Not available");
+mlDetails << QStringLiteral("Recoverability risk: Not assessed");
+mlDetails << QStringLiteral("Recommended next wipe method: Not available — no validated recovery model");
+mlDetails << QStringLiteral("Reason: no verified recovered/not-recovered training labels are configured. Feature similarity alone cannot establish whether original data is recoverable.");
+const QString deletedMlResults = mlDetails.join(QStringLiteral("\n"));
 const QString mlError = afterRead.success ? QString() :
-    QStringLiteral("Post-wipe data read failed; ML analysis could not be completed: %1")
+    QStringLiteral("Post-wipe data read failed; feature analysis could not be completed: %1")
         .arg(QString::fromStdString(afterRead.errorMessage));
 auditOperation(QString::fromStdString(file.name), deletedAuditPath,
     QStringLiteral("Deleted Files"), wipeMethodCombo->currentText(),
     passesForMethod(methodIndex), true,
     QStringLiteral("PASSED — physical extents matched the expected final-pass data"),
     result.bytesWiped, deletedMlResults, mlError);
-
 } else {
     std::string filePath =
         std::string(1, currentDriveLetter) + ":\\" + file.name;
@@ -1498,30 +1432,16 @@ auditOperation(QString::fromStdString(file.name), deletedAuditPath,
         progressLabel->setText("File wipe complete!");
 
         QString mlResult;
-
-if (!similarityScoreFile.empty()) {
-    mlResult += QString("\n\nSimilarity Score: %1%")
-        .arg(similarityScore * 100.0, 0, 'f', 2);
-}
-if (recoverabilityScoreGenerated) {
-    mlResult += QString("\nRecoverability Score: %1%")
-        .arg(recoverabilityScore * 100.0, 0, 'f', 2);
-
-    if (recoverabilityScore == 0.0) {
-        mlResult += "\nFile is not recoverable.";
-    }
-}
-if (recoverabilityScoreGenerated && !wipeRecommendation.empty()) {
-    mlResult += QString("\nRisk Level: %1")
-        .arg(
-            riskLevel == 0 ? "LOW" :
-            riskLevel == 1 ? "MEDIUM" :
-                             "HIGH"
-        );
-
-    mlResult += QString("\nRecommendation: %1")
-        .arg(QString::fromStdString(wipeRecommendation));
-}
+        if (!similarityScoreFile.empty()) {
+            mlResult += QString("\n\nFeature Similarity Score: %1%")
+                .arg(similarityScore * 100.0, 0, 'f', 2);
+        } else {
+            mlResult += "\n\nFeature Similarity: Not available for this operation type.";
+        }
+        mlResult += "\nRecoverability Score: Not available.";
+        mlResult += "\nRecovery Risk: Not assessed.";
+        mlResult += "\nRecommended Next Wipe Method: Not available without verified recovery-labelled training data.";
+        mlResult += "\nNote: feature similarity compares observed before/after byte statistics; it is not a probability of recovering the original file.";
 QMessageBox::information(
     this,
     "Done",
