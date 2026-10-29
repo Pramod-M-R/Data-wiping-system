@@ -259,6 +259,24 @@ def answer_question(
             navigation=[_nav("Open Activity Log", "activity_log"), _nav("Review Scan Results", "scan_results")],
         )
 
+    if intent == "recovery_file_guidance":
+        return _result(
+            "For file recovery, review the specific candidate and its scan details before proceeding. Avoid writing new data to the source drive because it may overwrite remnants, and use a destination on a different device. A deleted entry or file signature does not prove the file's contents can be recovered, and this context does not confirm that a recovery workflow is enabled in this build.",
+            "file_recovery_guidance",
+            caveats=["Do not save recovered output back to the source device when preserving other recoverable data matters."],
+            navigation=[_nav("Review Scan Results", "scan_results"), _nav("Open Devices", "devices")],
+            requires_action=True,
+        )
+
+    if intent == "recovery_drive_guidance":
+        return _result(
+            "For drive recovery, first review the supported scan result for the intended source device. Avoid writing to the source and use a separate destination device for recovered output. Scan coverage and filesystem support limit what may be found; this context does not confirm that a full-drive recovery workflow is enabled, so I cannot promise that all files can be restored.",
+            "drive_recovery_guidance",
+            caveats=["Do not overwrite the source drive while attempting recovery."],
+            navigation=[_nav("Open Devices", "devices"), _nav("Review Scan Results", "scan_results")],
+            requires_action=True,
+        )
+
     if intent == "recovery_guidance":
         return _result(
             "Avoid writing new data to the source drive if recovery matters, because new writes can overwrite remnants. Review scan candidates and use a separate destination for any recovered files. The current context does not confirm an enabled recovery workflow, so I can't promise that this build can restore a particular file.",
@@ -267,8 +285,12 @@ def answer_question(
             navigation=[_nav("Review Scan Results", "scan_results"), _nav("Open Devices", "devices")],
         )
 
+    
     if intent == "operation_selection":
-        if any(term in q for term in ("everything", "all data", "entire drive", "whole drive")):
+        if any(term in q for term in (
+            "everything", "all data", "entire drive", "whole drive", "full drive",
+            "entire usb", "whole usb", "full usb", "entire disk", "whole disk",
+        )):
             return _result(
                 "If your goal is to erase the whole USB drive, the full-drive wipe workflow is the relevant option. It can destroy data on the selected device. Confirm the exact drive identity and back up anything you need before entering the normal confirmation dialog. I will not start the wipe.",
                 "operation_guidance",
