@@ -167,9 +167,21 @@ QString auditPathForFile(const FileToWipe& file, char driveLetter)
 {
     const QString name = QString::fromStdString(file.name);
     if (file.isDeleted) {
-        if (!file.fileEntry.fullPath.empty()) return QString::fromStdString(file.fileEntry.fullPath);
-        return QStringLiteral("Deleted Files section on drive %1: / %2 (physical extents)")
+        QString location = QStringLiteral("Deleted Files section on drive %1: / %2")
             .arg(QChar(driveLetter)).arg(name);
+        if (!file.fileEntry.fullPath.empty())
+            location += QStringLiteral("; scanner path: ") + QString::fromStdString(file.fileEntry.fullPath);
+        QStringList extents;
+        for (const auto& extent : file.fileEntry.extents) {
+            extents << QStringLiteral("offset %1 bytes, length %2 bytes")
+                .arg(static_cast<qulonglong>(extent.first))
+                .arg(static_cast<qulonglong>(extent.second));
+        }
+        if (!extents.isEmpty())
+            location += QStringLiteral("; physical extents: [") + extents.join(QStringLiteral("] [")) + QStringLiteral("]");
+        else
+            location += QStringLiteral("; physical extents: unavailable");
+        return location;
     }
     return QStringLiteral("%1:\\%2").arg(QChar(driveLetter)).arg(name);
 }
@@ -1218,14 +1230,38 @@ else if (riskLevel == 2) {
 const QString deletedAuditPath = auditPathForFile(file, drive.letter);
 QString deletedMlResults = QStringLiteral("ML analysis was not generated for this operation.");
 if (similarityScoreFile == file.name) {
-    deletedMlResults = QStringLiteral("Similarity score: %1%\nRecoverability score: %2\nRisk level: %3\nRecommendation: %4")
-        .arg(similarityScore * 100.0, 0, 'f', 2)
-        .arg(recoverabilityScoreGenerated ? QString::number(recoverabilityScore * 100.0, 'f', 2) + QStringLiteral("%") : QStringLiteral("Not generated"))
+    QStringList details;
+    details << QStringLiteral("Similarity score: %1%").arg(similarityScore * 100.0, 0, 'f', 2);
+    details << QStringLiteral("Recoverability score: %1")
+        .arg(recoverabilityScoreGenerated
+            ? QString::number(recoverabilityScore * 100.0, 'f', 2) + QStringLiteral("%")
+            : QStringLiteral("Not generated"));
+    details << QStringLiteral("Risk level: %1")
         .arg(recoverabilityScoreGenerated
             ? (riskLevel == 0 ? QStringLiteral("LOW") : (riskLevel == 1 ? QStringLiteral("MEDIUM") : QStringLiteral("HIGH")))
-            : QStringLiteral("Not generated"))
+            : QStringLiteral("Not generated"));
+    details << QStringLiteral("Recommendation: %1")
         .arg(recoverabilityScoreGenerated && !wipeRecommendation.empty()
             ? QString::fromStdString(wipeRecommendation) : QStringLiteral("Not generated"));
+    const auto diff = featureDifferences.find(file.name);
+    if (diff != featureDifferences.end()) {
+        const auto& d = diff->second;
+        details << QStringLiteral("Feature differences — entropy: %1; mean byte value: %2; standard deviation: %3; zero-byte percentage: %4; 0xFF percentage: %5; printable-byte percentage: %6; unique-byte ratio: %7; dominant-byte percentage: %8; byte range: %9; chi-square: %10")
+            .arg(d.entropy,0,'g',8).arg(d.meanByteValue,0,'g',8)
+            .arg(d.standardDeviation,0,'g',8).arg(d.zeroBytePercentage,0,'g',8)
+            .arg(d.ffBytePercentage,0,'g',8).arg(d.printableBytePercentage,0,'g',8)
+            .arg(d.uniqueByteRatio,0,'g',8).arg(d.dominantBytePercentage,0,'g',8)
+            .arg(d.byteRange,0,'g',8).arg(d.chiSquare,0,'g',8);
+    }
+    details << QStringLiteral("Similarity model — trained: %1; evaluated: %2; saved: %3")
+        .arg(similarityModelTrained ? QStringLiteral("yes") : QStringLiteral("no"),
+             similarityModelEvaluated ? QStringLiteral("yes") : QStringLiteral("no"),
+             similarityModelSaved ? QStringLiteral("yes") : QStringLiteral("no"));
+    details << QStringLiteral("Recoverability model — trained: %1; evaluated: %2; saved: %3")
+        .arg(recoverabilityModelTrained ? QStringLiteral("yes") : QStringLiteral("no"),
+             recoverabilityModelEvaluated ? QStringLiteral("yes") : QStringLiteral("no"),
+             recoverabilityModelSaved ? QStringLiteral("yes") : QStringLiteral("no"));
+    deletedMlResults = details.join(QStringLiteral("\n"));
 }
 const QString postWipeMlError = QStringLiteral("Post-wipe extents were wiped and verified, but post-wipe feature extraction or ML analysis did not complete.");
 const bool deletedMlSucceeded = similarityScoreFile == file.name && recoverabilityScoreGenerated;
