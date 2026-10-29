@@ -1,0 +1,22 @@
+{
+  "full_drive_wipe": {
+    "description": "The full-drive workflow can destroy data on the selected device. Verify drive identity and back up needed files before confirming.",
+    "navigation": "operations",
+    "destructive": true
+  },
+  "single_file_wipe": {
+    "description": "Per-file erasure depends on filesystem metadata and storage technology. Deleted-file entries without trustworthy physical extents cannot be safely treated as exact wipe targets.",
+    "navigation": "operations",
+    "destructive": true
+  },
+  "recover_file": {
+    "description": "Avoid new writes to the source when recovery matters and use a separate destination. The assistant must not promise recovery unless the application supplies a result.",
+    "navigation": "scan_results",
+    "destructive": false
+  },
+  "recover_drive": {
+    "description": "Review the supported scan result and its limitations. The assistant must not assume the current build supports every recovery workflow.",
+    "navigation": "scan_results",
+    "destructive": false
+  }
+}
