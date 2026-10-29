@@ -200,6 +200,27 @@ def answer_question(
             navigation=[_nav("Review Scan Results", "scan_results"), _nav("View Activity Log", "activity_log")],
         )
 
+    if intent == "account_info":
+        user = str(context.get("signed_in_user", "")).strip()
+        settings = context.get("settings", {})
+        if not user and isinstance(settings, dict):
+            user = str(settings.get("signed_in_user", "")).strip()
+        if not user:
+            return _result(
+                "The current application context doesn't include an active username. Check the account label in DataGuard's header or Settings; I won't infer a user from an earlier chat message.",
+                "account_information",
+                navigation=[_nav("Open Settings", "settings")],
+            )
+        persistence = settings.get("persistence", "") if isinstance(settings, dict) else ""
+        answer = f"The current DataGuard session is signed in as: {user}."
+        if persistence:
+            answer += f" The settings page reports local persistence: {persistence}."
+        return _result(
+            answer,
+            "account_information",
+            navigation=[_nav("Open Settings", "settings")],
+        )
+
     if intent == "help":
         return _result(
             "I can help you understand device and scan summaries, explain wipe-method trade-offs, interpret a recorded error or verification result, and find a certificate. My answers use only the current application snapshot and approved local help. If a value is unavailable, I'll say so rather than guess.",
