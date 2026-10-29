@@ -6,7 +6,7 @@ The initial assistant implementation follows **Mode A: local rule-based prototyp
 
 - The Qt Assistant page starts app/main.py as a short-lived Python subprocess.
 - Request/response traffic is one JSON object over stdin/stdout.
-- The C++ UI passes the current screen, selected removable-device metadata, current scan summary, selected-file summary, most recent operation record, and selected certificate metadata when available.
+- The C++ UI passes the current screen and signed-in username; a bounded inventory of connected removable devices; selected-device metadata; up to 12 current scan entries with logical locations and scan counts; selected-file metadata; up to 8 recent Activity Log records; up to 5 recent certificate records and the selected certificate when available. Current scan/file context is included only when it belongs to the selected drive. Historical entries are newest-first.
 - Raw file contents, credentials, authentication tokens, physical device paths, and serial numbers are not included in assistant context.
 - The service is guidance-only. Its response schema only includes text, caveats, and navigation destination IDs. The Qt UI has an independent navigation allowlist and does not route assistant output to wipe or recovery functions.
 - Each request has an eight-second process timeout. Missing Python, a missing script, timeout, or invalid JSON produces a built-in safe fallback. Storage operations do not depend on the assistant process.
