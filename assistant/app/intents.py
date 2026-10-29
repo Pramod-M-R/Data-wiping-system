@@ -50,7 +50,7 @@ _PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
         r"\b(who am i logged in as|who is logged in|which user is signed in|current user|signed-in user|username|account settings|my account)\b",
     )),
     ("device_info", (
-        r"\b(device|drive|usb|pendrive|pen drive|capacity|filesystem|file system|connected)\b",
+        r"\b(devices?|drives?|usbs?|pendrives?|pen drives?|capacity|filesystems?|file systems?|connected)\b",
     )),
     ("ml_explanation", (
         r"\b(ml|machine learning|similarity score|recoverability|risk level|prediction|recommendation)\b",
