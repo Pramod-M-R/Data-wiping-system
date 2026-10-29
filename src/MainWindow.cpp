@@ -86,12 +86,6 @@ QString auditRecordDigest(QJsonObject record)
     const QByteArray bytes = QJsonDocument(record).toJson(QJsonDocument::Compact);
     return QString::fromLatin1(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex());
 }
-QString istTimestampNow()
-{
-    const QTimeZone ist(QByteArrayLiteral("Asia/Kolkata"));
-    return QDateTime::currentDateTimeUtc().toTimeZone(ist)
-        .toString(QStringLiteral("dd MMM yyyy, hh:mm:ss AP 'IST'"));
-}
 QString displayTimestamp(const QJsonObject& record)
 {
     const QString raw = record.value(QStringLiteral("timestamp")).toString().trimmed();
@@ -255,10 +249,10 @@ void styleAuditTable(QTableWidget* table)
     table->setEditTriggers(QAbstractItemView::NoEditTriggers);
     table->setSelectionBehavior(QAbstractItemView::SelectRows);
     table->setSelectionMode(QAbstractItemView::SingleSelection);
-    table->setWordWrap(false);
+    table->setWordWrap(true);
     table->setTextElideMode(Qt::ElideRight);
     table->verticalHeader()->setVisible(false);
-    table->verticalHeader()->setDefaultSectionSize(42);
+    table->verticalHeader()->setDefaultSectionSize(56);
     table->setShowGrid(true);
     table->setHorizontalScrollMode(QAbstractItemView::ScrollPerPixel);
     table->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
@@ -524,6 +518,7 @@ void MainWindow::refreshActivityLog()
         const QString rawMl = r.value(QStringLiteral("mlResults")).toString();
         if (!rawMl.isEmpty()) m_activityTable->item(row, 6)->setToolTip(rawMl);
     }
+    m_activityTable->resizeRowsToContents();
 }
 
 void MainWindow::refreshCertificates()
@@ -574,6 +569,7 @@ void MainWindow::refreshCertificates()
         const QString rawMl = r.value(QStringLiteral("mlResults")).toString();
         if (!rawMl.isEmpty()) m_certificatesTable->item(row, 6)->setToolTip(rawMl);
     }
+    m_certificatesTable->resizeRowsToContents();
 }
 
 void MainWindow::recordWipeActivity(const QString& fileName, const QString& filePath,
