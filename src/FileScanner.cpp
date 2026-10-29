@@ -562,6 +562,14 @@ if (!chainValid) {
     entry.dataOffset = 0;
     entry.isValid = false;
 
+    std::unordered_set<uint32_t> claimedClusters;
+    for (const auto& priorEntry : results) {
+        if (priorEntry.isValid) {
+            for (uint32_t priorCluster : priorEntry.clusterChain)
+                claimedClusters.insert(priorCluster);
+        }
+    }
+
     bool contiguousCandidate = entry.sizeBytes > 0 &&
         startCluster >= 2 &&
         startCluster <= maxDataCluster &&
@@ -594,6 +602,7 @@ if (!chainValid) {
                     static_cast<uint64_t>(startCluster) + clusterIndex;
                 const uint64_t fatEntryRelative = candidateCluster * sizeof(uint32_t);
                 if (candidateCluster > maxDataCluster ||
+                    claimedClusters.find(static_cast<uint32_t>(candidateCluster)) != claimedClusters.end() ||
                     fatEntryRelative > fatSizeBytes - sizeof(uint32_t)) {
                     allCandidateClustersFree = false;
                     break;
@@ -648,6 +657,7 @@ if (!chainValid) {
                     std::min<uint64_t>(clusterSize, remainingBytes);
                 entry.clusterChain.push_back(candidateCluster);
                 entry.extents.push_back({extentOffset, extentLength});
+                claimedClusters.insert(candidateCluster);
                 remainingBytes -= extentLength;
             }
 
