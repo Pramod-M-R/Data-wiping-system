@@ -13,6 +13,12 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMessageBox>
+#include <QTimer>
+#include <QTextBrowser>
+#include <QProcessEnvironment>
+#include <QProcess>
+#include <QMap>
+#include <QLineEdit>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QScrollArea>
@@ -348,7 +354,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
     m_pages->addWidget(buildDashboardPage()); m_pages->addWidget(buildDevicesPage()); m_pages->addWidget(buildScanResultsPage()); m_pages->addWidget(buildOperationsPage());
     m_pages->addWidget(buildActivityLogPage());
     m_pages->addWidget(buildCertificatesPage());
-    m_pages->addWidget(buildPlaceholderPage(QStringLiteral("DataGuard Assistant"),QStringLiteral("The assistant is not connected to an active backend in this build."),QStringLiteral("✦")));
+    m_pages->addWidget(buildAssistantPage());
     m_pages->addWidget(buildSettingsPage()); rightLayout->addWidget(m_pages,1); shell->addWidget(right,1); setCentralWidget(background);
 
     connect(refreshButton,&QPushButton::clicked,this,&MainWindow::onRefreshClicked);
@@ -377,8 +383,15 @@ void MainWindow::setSignedInUser(const QString& username)
 }
 void MainWindow::navigateTo(int index,const QString& title)
 {
-    if(!m_pages||index<0||index>=m_pages->count())return;
-    m_pages->setCurrentIndex(index); if(m_pageTitle)m_pageTitle->setText(title);
+    if (!m_pages || index < 0 || index >= m_pages->count())
+        return;
+    const int current = m_pages->currentIndex();
+    if (index == 6 && current != 6)
+        m_lastNonAssistantPageIndex = current;
+    else if (index != 6)
+        m_lastNonAssistantPageIndex = index;
+    m_pages->setCurrentIndex(index);
+    if (m_pageTitle) m_pageTitle->setText(title);
 }
 void MainWindow::signOut()
 {
@@ -698,6 +711,551 @@ void MainWindow::recordWipeActivity(const QString& fileName, const QString& file
         QMessageBox::warning(this, QStringLiteral("PDF certificate generation failed"),
             QStringLiteral("The activity was recorded, but its PDF certificate could not be saved. Check write access to the DataGuard application-data folder."));
     }
+}
+
+
+QWidget* MainWindow::buildAssistantPage()
+{
+    auto* page = new QWidget;
+    auto* pageLayout = new QVBoxLayout(page);
+    pageLayout->setContentsMargins(4, 4, 8, 8);
+    pageLayout->setSpacing(12);
+
+    auto* intro = makeCard(page);
+    auto* introLayout = new QVBoxLayout(intro);
+    introLayout->setContentsMargins(18, 16, 18, 16);
+    introLayout->setSpacing(7);
+    introLayout->addWidget(heading(QStringLiteral("DataGuard Assistant"), intro));
+    introLayout->addWidget(bodyText(
+        QStringLiteral("Ask about the current device, scan, wipe method, recorded result, verification, or certificate. "
+                       "This assistant explains the application's evidence; it cannot start a wipe or recovery."),
+        intro));
+    m_assistantStatus = bodyText(
+        QStringLiteral("Local rule-based mode · no cloud connection required"), intro);
+    m_assistantStatus->setStyleSheet(QStringLiteral("color:#75d8a0;font-size:12px;"));
+    introLayout->addWidget(m_assistantStatus);
+    pageLayout->addWidget(intro);
+
+    auto* chat = makeCard(page);
+    auto* chatLayout = new QVBoxLayout(chat);
+    chatLayout->setContentsMargins(14, 12, 14, 14);
+    chatLayout->setSpacing(9);
+    auto* headingRow = new QHBoxLayout;
+    headingRow->addWidget(heading(QStringLiteral("Conversation"), chat));
+    headingRow->addStretch();
+    m_assistantClearButton = new QPushButton(QStringLiteral("Clear conversation"), chat);
+    m_assistantClearButton->setStyleSheet(QStringLiteral(
+        "QPushButton{color:#dbe9f7;background:rgba(44,73,105,150);border:1px solid rgba(148,186,216,75);border-radius:7px;padding:7px 10px;}"));
+    connect(m_assistantClearButton, &QPushButton::clicked,
+            this, &MainWindow::clearAssistantConversation);
+    headingRow->addWidget(m_assistantClearButton);
+    chatLayout->addLayout(headingRow);
+
+    m_assistantTranscript = new QTextBrowser(chat);
+    m_assistantTranscript->setReadOnly(true);
+    m_assistantTranscript->setOpenLinks(false);
+    m_assistantTranscript->setMinimumHeight(245);
+    m_assistantTranscript->setStyleSheet(QStringLiteral(
+        "QTextBrowser{color:#eaf3ff;background:rgba(2,11,29,220);border:1px solid rgba(122,177,211,65);border-radius:9px;padding:9px;selection-background-color:#285577;}"));
+    chatLayout->addWidget(m_assistantTranscript, 1);
+    pageLayout->addWidget(chat, 1);
+
+    auto* prompts = makeCard(page);
+    auto* promptsLayout = new QVBoxLayout(prompts);
+    promptsLayout->setContentsMargins(14, 12, 14, 12);
+    promptsLayout->setSpacing(8);
+    promptsLayout->addWidget(heading(QStringLiteral("Suggested questions"), prompts));
+    m_assistantSuggestionsLayout = new QGridLayout;
+    m_assistantSuggestionsLayout->setHorizontalSpacing(8);
+    m_assistantSuggestionsLayout->setVerticalSpacing(8);
+    const QStringList suggested = {
+        QStringLiteral("What does this scan mean?"),
+        QStringLiteral("Why did the wipe fail?"),
+        QStringLiteral("Explain the latest ML results"),
+        QStringLiteral("What does my certificate prove?")
+    };
+    for (int i = 0; i < suggested.size(); ++i) {
+        auto* button = new QPushButton(suggested.at(i), prompts);
+        button->setCursor(Qt::PointingHandCursor);
+        button->setMinimumHeight(35);
+        button->setStyleSheet(QStringLiteral(
+            "QPushButton{color:#eaf5ff;background:rgba(20,47,75,190);border:1px solid rgba(112,175,213,75);border-radius:8px;padding:7px 10px;text-align:left;} "
+            "QPushButton:hover{background:rgba(29,83,119,220);} QPushButton:disabled{color:#8498ab;}"));
+        connect(button, &QPushButton::clicked, this, [this, button]() {
+            if (m_assistantInput && m_assistantSendButton && m_assistantSendButton->isEnabled()) {
+                m_assistantInput->setText(button->text());
+                sendAssistantQuestion();
+            }
+        });
+        m_assistantSuggestionButtons.push_back(button);
+        m_assistantSuggestionsLayout->addWidget(button, i / 2, i % 2);
+    }
+    promptsLayout->addLayout(m_assistantSuggestionsLayout);
+    pageLayout->addWidget(prompts);
+
+    auto* navigation = makeCard(page);
+    auto* navigationLayout = new QVBoxLayout(navigation);
+    navigationLayout->setContentsMargins(14, 10, 14, 12);
+    navigationLayout->setSpacing(6);
+    navigationLayout->addWidget(bodyText(QStringLiteral("Suggested next screen"), navigation));
+    m_assistantNavigationLayout = new QHBoxLayout;
+    m_assistantNavigationLayout->setSpacing(8);
+    navigationLayout->addLayout(m_assistantNavigationLayout);
+    pageLayout->addWidget(navigation);
+
+    auto* inputCard = makeCard(page);
+    auto* inputLayout = new QHBoxLayout(inputCard);
+    inputLayout->setContentsMargins(12, 10, 12, 10);
+    inputLayout->setSpacing(8);
+    m_assistantInput = new QLineEdit(inputCard);
+    m_assistantInput->setMaxLength(2000);
+    m_assistantInput->setPlaceholderText(QStringLiteral("Ask DataGuard a question…"));
+    m_assistantInput->setClearButtonEnabled(true);
+    m_assistantInput->setStyleSheet(QStringLiteral(
+        "QLineEdit{color:#f2f7ff;background:rgba(2,11,29,220);border:1px solid rgba(122,177,211,80);border-radius:8px;padding:10px 12px;} "
+        "QLineEdit:focus{border:1px solid #65d9f7;}"));
+    inputLayout->addWidget(m_assistantInput, 1);
+    m_assistantSendButton = new QPushButton(QStringLiteral("Send"), inputCard);
+    stylePrimaryButton(m_assistantSendButton);
+    m_assistantSendButton->setMinimumWidth(90);
+    inputLayout->addWidget(m_assistantSendButton);
+    connect(m_assistantSendButton, &QPushButton::clicked,
+            this, &MainWindow::sendAssistantQuestion);
+    connect(m_assistantInput, &QLineEdit::returnPressed,
+            this, &MainWindow::sendAssistantQuestion);
+    connect(m_assistantInput, &QLineEdit::textChanged, this, [this](const QString& text) {
+        if (m_assistantSendButton &&
+            (!m_assistantProcess || m_assistantProcess->state() == QProcess::NotRunning))
+            m_assistantSendButton->setEnabled(!text.trimmed().isEmpty());
+    });
+    pageLayout->addWidget(inputCard);
+
+    m_assistantTimeoutTimer = new QTimer(this);
+    m_assistantTimeoutTimer->setSingleShot(true);
+    connect(m_assistantTimeoutTimer, &QTimer::timeout, this, [this]() {
+        if (m_assistantProcess && m_assistantProcess->state() != QProcess::NotRunning) {
+            m_assistantTimedOut = true;
+            m_assistantProcess->kill();
+        }
+    });
+
+    appendAssistantMessage(QStringLiteral("assistant"),
+        QStringLiteral("Hello! I can explain current application details and guide you to the relevant screen. "
+                       "I will say when information is missing rather than inventing device state or ML results."));
+    return scrollPage(page);
+}
+
+QJsonObject MainWindow::buildAssistantContext()
+{
+    QJsonObject context;
+    const QStringList screenNames = {
+        QStringLiteral("dashboard"), QStringLiteral("devices"),
+        QStringLiteral("scan_results"), QStringLiteral("operations"),
+        QStringLiteral("activity_log"), QStringLiteral("certificates"),
+        QStringLiteral("assistant"), QStringLiteral("settings")
+    };
+    int screenIndex = m_pages ? m_pages->currentIndex() : 0;
+    if (screenIndex == 6) screenIndex = m_lastNonAssistantPageIndex;
+    if (screenIndex < 0 || screenIndex >= screenNames.size()) screenIndex = 0;
+    context.insert(QStringLiteral("screen"), screenNames.at(screenIndex));
+
+    // Read-only device summary. Do not expose raw physical paths or serial numbers.
+    if (driveList && driveList->currentRow() >= 0) {
+        DeviceManager manager;
+        const auto drives = manager.listRemovableDrives();
+        const int row = driveList->currentRow();
+        if (row < static_cast<int>(drives.size())) {
+            const auto& drive = drives.at(static_cast<size_t>(row));
+            QJsonObject device;
+            device.insert(QStringLiteral("display_name"),
+                QStringLiteral("USB Drive %1:").arg(QChar(drive.letter)));
+            const QString model = QString::fromStdString(drive.model).trimmed();
+            if (!model.isEmpty()) device.insert(QStringLiteral("model"), model.left(120));
+            device.insert(QStringLiteral("drive_letter"), QStringLiteral("%1:").arg(QChar(drive.letter)));
+            device.insert(QStringLiteral("capacity_bytes"), static_cast<double>(drive.sizeBytes));
+            device.insert(QStringLiteral("connected"), true);
+            context.insert(QStringLiteral("device"), device);
+        }
+    }
+
+    // A scan is considered current only while its result tree is still present.
+    if (fileTree && scanStatusLabel && fileTree->topLevelItemCount() > 0 &&
+        scanStatusLabel->text().startsWith(QStringLiteral("Scan complete"))) {
+        int existingCount = 0, deletedCount = 0, hiddenCount = 0;
+        std::function<void(QTreeWidgetItem*)> visit;
+        visit = [&](QTreeWidgetItem* item) {
+            if (!item) return;
+            const QString status = item->text(2);
+            if (status == QStringLiteral("Existing")) ++existingCount;
+            else if (status == QStringLiteral("DELETED")) ++deletedCount;
+            else if (status.compare(QStringLiteral("Hidden"), Qt::CaseInsensitive) == 0) ++hiddenCount;
+            for (int i = 0; i < item->childCount(); ++i) visit(item->child(i));
+        };
+        for (int i = 0; i < fileTree->topLevelItemCount(); ++i) visit(fileTree->topLevelItem(i));
+
+        QJsonObject scan;
+        scan.insert(QStringLiteral("existing_entries"), existingCount);
+        scan.insert(QStringLiteral("potentially_deleted_entries"), deletedCount);
+        if (hiddenCount > 0) scan.insert(QStringLiteral("hidden_entries"), hiddenCount);
+        scan.insert(QStringLiteral("scan_status"), QStringLiteral("completed"));
+        QJsonArray limitations;
+        limitations.append(QStringLiteral("Deleted entries do not guarantee recoverable file contents."));
+        for (const auto& entry : deletedFileEntries) {
+            if (entry.second.sizeBytes > 0 && entry.second.extents.empty()) {
+                limitations.append(QStringLiteral("At least one listed deleted entry has no physical extents available."));
+                break;
+            }
+        }
+        scan.insert(QStringLiteral("limitations"), limitations);
+        context.insert(QStringLiteral("scan_summary"), scan);
+    }
+
+    std::vector<FileToWipe> selected;
+    if (fileTree) collectSelectedFiles(fileTree->invisibleRootItem(), selected);
+    QJsonObject selectedOperation;
+    if (wipeMethodCombo) selectedOperation.insert(QStringLiteral("wipe_method"), wipeMethodCombo->currentText());
+    if (!selected.empty()) {
+        selectedOperation.insert(QStringLiteral("workflow"), QStringLiteral("selected_file_wipe"));
+        selectedOperation.insert(QStringLiteral("selected_file_count"), static_cast<int>(selected.size()));
+        QJsonArray selectedFiles;
+        const size_t selectedCount = std::min<size_t>(selected.size(), 10);
+        for (size_t i = 0; i < selectedCount; ++i) {
+            QJsonObject item;
+            item.insert(QStringLiteral("file_name"), QString::fromStdString(selected[i].name));
+            item.insert(QStringLiteral("is_deleted"), selected[i].isDeleted);
+            item.insert(QStringLiteral("size_bytes"), static_cast<double>(selected[i].sizeBytes));
+            selectedFiles.append(item);
+        }
+        selectedOperation.insert(QStringLiteral("selected_files"), selectedFiles);
+        context.insert(QStringLiteral("selected_operation"), selectedOperation);
+    } else if (screenIndex == 3) {
+        selectedOperation.insert(QStringLiteral("workflow"), QStringLiteral("full_drive_wipe_confirmation_required"));
+        context.insert(QStringLiteral("selected_operation"), selectedOperation);
+    }
+
+    const QJsonArray records = readAuditRecords();
+    QJsonObject latest;
+    if (!records.isEmpty() && records.last().isObject()) latest = records.last().toObject();
+    if (!latest.isEmpty()) {
+        QJsonObject operation;
+        operation.insert(QStringLiteral("timestamp"), latest.value(QStringLiteral("timestamp")).toString());
+        operation.insert(QStringLiteral("file_name"), latest.value(QStringLiteral("fileName")).toString());
+        operation.insert(QStringLiteral("source"), latest.value(QStringLiteral("source")).toString());
+        operation.insert(QStringLiteral("method"), latest.value(QStringLiteral("method")).toString());
+        operation.insert(QStringLiteral("status"), latest.value(QStringLiteral("status")).toString());
+        operation.insert(QStringLiteral("verification"), latest.value(QStringLiteral("verification")).toString());
+        operation.insert(QStringLiteral("error_message"), latest.value(QStringLiteral("errorMessage")).toString().left(320));
+        operation.insert(QStringLiteral("ml_summary"), mlTableSummary(latest).left(800));
+        operation.insert(QStringLiteral("certificate_id"), latest.value(QStringLiteral("certificateId")).toString());
+        bool bytesOk = false;
+        const qulonglong bytes = latest.value(QStringLiteral("bytesWiped")).toString().toULongLong(&bytesOk);
+        if (bytesOk) operation.insert(QStringLiteral("bytes_wiped"), static_cast<double>(bytes));
+        context.insert(QStringLiteral("last_recorded_operation"), operation);
+    }
+
+    QString selectedCertificateId;
+    if (screenIndex == 5 && m_certificatesTable &&
+        m_certificatesTable->currentRow() >= 0 &&
+        m_certificatesTable->item(m_certificatesTable->currentRow(), 0)) {
+        selectedCertificateId = m_certificatesTable->item(m_certificatesTable->currentRow(), 0)->text();
+    } else if (screenIndex == 4 && m_activityTable &&
+               m_activityTable->currentRow() >= 0 &&
+               m_activityTable->item(m_activityTable->currentRow(), 7)) {
+        selectedCertificateId = m_activityTable->item(m_activityTable->currentRow(), 7)->text();
+    }
+    if (!selectedCertificateId.isEmpty()) {
+        for (int i = records.size() - 1; i >= 0; --i) {
+            if (!records.at(i).isObject()) continue;
+            const QJsonObject record = records.at(i).toObject();
+            if (record.value(QStringLiteral("certificateId")).toString() != selectedCertificateId) continue;
+            QJsonObject certificate;
+            certificate.insert(QStringLiteral("certificate_id"), selectedCertificateId);
+            certificate.insert(QStringLiteral("timestamp"), record.value(QStringLiteral("timestamp")).toString());
+            certificate.insert(QStringLiteral("user"), record.value(QStringLiteral("user")).toString());
+            certificate.insert(QStringLiteral("file_name"), record.value(QStringLiteral("fileName")).toString());
+            certificate.insert(QStringLiteral("location"), conciseLocation(record));
+            certificate.insert(QStringLiteral("method"), readableMethod(record));
+            certificate.insert(QStringLiteral("status"), record.value(QStringLiteral("status")).toString());
+            certificate.insert(QStringLiteral("verification"), record.value(QStringLiteral("verification")).toString());
+            certificate.insert(QStringLiteral("ml_summary"), mlTableSummary(record).left(800));
+            bool passesOk = false;
+            const int passes = record.value(QStringLiteral("passes")).toString().toInt(&passesOk);
+            if (passesOk) certificate.insert(QStringLiteral("passes"), passes);
+            context.insert(QStringLiteral("certificate"), certificate);
+            break;
+        }
+    }
+    return context;
+}
+
+void MainWindow::appendAssistantMessage(const QString& role, const QString& text)
+{
+    if (!m_assistantTranscript) return;
+    const bool user = role == QStringLiteral("user");
+    const QString title = user ? QStringLiteral("You") : QStringLiteral("DataGuard Assistant");
+    const QString safe = text.toHtmlEscaped().replace(QStringLiteral("\n"), QStringLiteral("<br>"));
+    const QString html = QStringLiteral(
+        "<div style='margin:8px 0 14px 0;padding:10px 12px;background:%1;border-radius:9px;color:#eff6ff;'>"
+        "<div style='font-weight:700;color:%2;margin-bottom:5px;'>%3</div><div style='line-height:1.45;'>%4</div></div>")
+        .arg(user ? QStringLiteral("rgba(24,73,104,0.48)") : QStringLiteral("rgba(23,34,53,0.80)"),
+             user ? QStringLiteral("#78d7f3") : QStringLiteral("#d9e9ff"),
+             title.toHtmlEscaped(), safe);
+    m_assistantTranscript->append(html);
+    m_assistantTranscript->verticalScrollBar()->setValue(m_assistantTranscript->verticalScrollBar()->maximum());
+}
+
+void MainWindow::setAssistantBusy(bool busy)
+{
+    if (m_assistantInput) m_assistantInput->setEnabled(!busy);
+    if (m_assistantSendButton) {
+        m_assistantSendButton->setEnabled(!busy && m_assistantInput &&
+            !m_assistantInput->text().trimmed().isEmpty());
+        m_assistantSendButton->setText(busy ? QStringLiteral("Thinking…") : QStringLiteral("Send"));
+    }
+    if (m_assistantClearButton) m_assistantClearButton->setEnabled(!busy);
+    for (auto* button : m_assistantSuggestionButtons)
+        if (button) button->setEnabled(!busy);
+}
+
+void MainWindow::clearAssistantConversation()
+{
+    if (m_assistantProcess && m_assistantProcess->state() != QProcess::NotRunning) return;
+    if (m_assistantTranscript) m_assistantTranscript->clear();
+    if (m_assistantNavigationLayout) {
+        while (QLayoutItem* item = m_assistantNavigationLayout->takeAt(0)) {
+            if (QWidget* widget = item->widget()) widget->deleteLater();
+            delete item;
+        }
+    }
+    m_assistantNavigationButtons.clear();
+    appendAssistantMessage(QStringLiteral("assistant"),
+        QStringLiteral("Conversation cleared. Ask about the current application state whenever you're ready."));
+}
+
+void MainWindow::addAssistantNavigationButtons(const QJsonArray& suggestions)
+{
+    if (!m_assistantNavigationLayout) return;
+    while (QLayoutItem* item = m_assistantNavigationLayout->takeAt(0)) {
+        if (QWidget* widget = item->widget()) widget->deleteLater();
+        delete item;
+    }
+    m_assistantNavigationButtons.clear();
+
+    const QMap<QString, int> destinations = {
+        {QStringLiteral("dashboard"), 0}, {QStringLiteral("devices"), 1},
+        {QStringLiteral("scan_results"), 2}, {QStringLiteral("operations"), 3},
+        {QStringLiteral("activity_log"), 4}, {QStringLiteral("certificates"), 5},
+        {QStringLiteral("assistant"), 6}, {QStringLiteral("settings"), 7}
+    };
+    const QStringList titles = {
+        QStringLiteral("Dashboard"), QStringLiteral("Devices"),
+        QStringLiteral("Scan Results"), QStringLiteral("Operations"),
+        QStringLiteral("Activity Log"), QStringLiteral("Certificates"),
+        QStringLiteral("Assistant"), QStringLiteral("Settings")
+    };
+    int count = 0;
+    for (const QJsonValue& value : suggestions) {
+        if (!value.isObject() || count >= 3) continue;
+        const QJsonObject item = value.toObject();
+        const QString destination = item.value(QStringLiteral("destination")).toString();
+        const QString label = item.value(QStringLiteral("label")).toString().left(80);
+        if (!destinations.contains(destination) || label.isEmpty()) continue;
+        const int index = destinations.value(destination);
+        auto* button = new QPushButton(label, this);
+        button->setCursor(Qt::PointingHandCursor);
+        button->setStyleSheet(QStringLiteral(
+            "QPushButton{color:#eaf5ff;background:rgba(20,47,75,190);border:1px solid rgba(112,175,213,75);border-radius:8px;padding:7px 10px;}"));
+        connect(button, &QPushButton::clicked, this, [this, index, titles]() {
+            if (index >= 0 && index < m_navigationButtons.size())
+                m_navigationButtons[index]->setChecked(true);
+            navigateTo(index, titles.at(index));
+        });
+        m_assistantNavigationButtons.push_back(button);
+        m_assistantNavigationLayout->addWidget(button);
+        ++count;
+    }
+    m_assistantNavigationLayout->addStretch();
+}
+
+void MainWindow::renderAssistantResponse(const QJsonObject& response)
+{
+    appendAssistantMessage(QStringLiteral("assistant"), response.value(QStringLiteral("answer")).toString());
+    const QJsonArray caveats = response.value(QStringLiteral("caveats")).toArray();
+    if (!caveats.isEmpty()) {
+        QString text = QStringLiteral("Important");
+        for (const QJsonValue& value : caveats) {
+            if (value.isString() && !value.toString().trimmed().isEmpty())
+                text += QStringLiteral("\n• ") + value.toString().trimmed();
+        }
+        appendAssistantMessage(QStringLiteral("assistant"), text);
+    }
+    addAssistantNavigationButtons(response.value(QStringLiteral("suggested_navigation")).toArray());
+}
+
+void MainWindow::handleAssistantUnavailable(const QString& reason)
+{
+    const QString q = m_assistantPendingQuestion.trimmed().toLower();
+    QString answer;
+    QJsonArray navigation;
+
+    auto addNav = [&navigation](const QString& label, const QString& destination) {
+        QJsonObject item;
+        item.insert(QStringLiteral("label"), label);
+        item.insert(QStringLiteral("destination"), destination);
+        navigation.append(item);
+    };
+
+    if (q.contains(QStringLiteral("no physical extents")) || q.contains(QStringLiteral("extent"))) {
+        answer = QStringLiteral("The scanner did not supply a trustworthy physical-extent list for this deleted entry. A visible deleted filename does not prove that the original storage locations are known. Do not continue with an inferred range on a drive containing important data.");
+        addNav(QStringLiteral("Review Scan Results"), QStringLiteral("scan_results"));
+    } else if (q.contains(QStringLiteral("wipe")) || q.contains(QStringLiteral("erase")) || q.contains(QStringLiteral("recover"))) {
+        answer = QStringLiteral("I cannot start a wipe or recovery from chat. Use the normal application workflow, verify the physical target, and follow its confirmation prompts. Cancel if any target information is uncertain.");
+        addNav(QStringLiteral("Open Operations"), QStringLiteral("operations"));
+        addNav(QStringLiteral("Review Scan Results"), QStringLiteral("scan_results"));
+    } else if (q.contains(QStringLiteral("certificate")) || q.contains(QStringLiteral("pdf"))) {
+        answer = QStringLiteral("Open Certificates, select the relevant record, and open its PDF. The certificate records application-reported evidence; it is not a universal guarantee of permanent irrecoverability.");
+        addNav(QStringLiteral("Open Certificates"), QStringLiteral("certificates"));
+    } else if (q.contains(QStringLiteral("scan"))) {
+        const QString status = scanStatusLabel ? scanStatusLabel->text() : QString();
+        answer = status.startsWith(QStringLiteral("Scan complete"))
+            ? QStringLiteral("The current UI reports: %1. This fallback does not independently inspect the device. Deleted entries are candidates, not proof that contents remain recoverable.").arg(status)
+            : QStringLiteral("There is no completed scan summary in the current UI context. Open Devices, select the intended drive, and run a scan before asking again.");
+        addNav(QStringLiteral("Open Devices"), QStringLiteral("devices"));
+        addNav(QStringLiteral("Review Scan Results"), QStringLiteral("scan_results"));
+    } else {
+        answer = QStringLiteral("The local assistant service could not be reached (%1). Core device, scan and wipe workflows are separate and remain unaffected. Open the relevant screen for recorded application details.")
+            .arg(reason.left(180));
+        addNav(QStringLiteral("Open Devices"), QStringLiteral("devices"));
+        addNav(QStringLiteral("Open Activity Log"), QStringLiteral("activity_log"));
+    }
+
+    appendAssistantMessage(QStringLiteral("assistant"), answer);
+    addAssistantNavigationButtons(navigation);
+    if (m_assistantStatus)
+        m_assistantStatus->setText(QStringLiteral("Python assistant unavailable · built-in safe fallback is active"));
+}
+
+void MainWindow::sendAssistantQuestion()
+{
+    if (!m_assistantInput || !m_assistantSendButton ||
+        (m_assistantProcess && m_assistantProcess->state() != QProcess::NotRunning))
+        return;
+    const QString question = m_assistantInput->text().trimmed();
+    if (question.isEmpty()) return;
+    if (question.size() > 2000) {
+        QMessageBox::information(this, QStringLiteral("Question too long"),
+            QStringLiteral("Please keep questions to 2,000 characters or fewer."));
+        return;
+    }
+
+    m_assistantPendingQuestion = question;
+    appendAssistantMessage(QStringLiteral("user"), question);
+    m_assistantInput->clear();
+    setAssistantBusy(true);
+    if (m_assistantStatus)
+        m_assistantStatus->setText(QStringLiteral("Preparing a private, minimal context snapshot…"));
+    m_assistantStdout.clear();
+    m_assistantTimedOut = false;
+
+    const QString script = QDir(QCoreApplication::applicationDirPath())
+        .filePath(QStringLiteral("assistant/app/main.py"));
+    if (!QFileInfo::exists(script)) {
+        setAssistantBusy(false);
+        handleAssistantUnavailable(QStringLiteral("the assistant script was not found beside the executable"));
+        return;
+    }
+
+    QString interpreter = QStandardPaths::findExecutable(QStringLiteral("python.exe"));
+    if (interpreter.isEmpty()) interpreter = QStandardPaths::findExecutable(QStringLiteral("python"));
+    if (interpreter.isEmpty()) interpreter = QStandardPaths::findExecutable(QStringLiteral("python3.exe"));
+    if (interpreter.isEmpty()) interpreter = QStandardPaths::findExecutable(QStringLiteral("python3"));
+    QStringList arguments;
+    if (interpreter.isEmpty()) {
+        interpreter = QStandardPaths::findExecutable(QStringLiteral("py.exe"));
+        if (interpreter.isEmpty()) interpreter = QStandardPaths::findExecutable(QStringLiteral("py"));
+        if (!interpreter.isEmpty()) arguments << QStringLiteral("-3");
+    }
+    if (interpreter.isEmpty()) {
+        setAssistantBusy(false);
+        handleAssistantUnavailable(QStringLiteral("no Python interpreter was found"));
+        return;
+    }
+    arguments << QFileInfo(script).absoluteFilePath();
+
+    QJsonObject request;
+    request.insert(QStringLiteral("request_id"), QUuid::createUuid().toString(QUuid::WithoutBraces));
+    request.insert(QStringLiteral("question"), question);
+    request.insert(QStringLiteral("context"), buildAssistantContext());
+    const QByteArray payload = QJsonDocument(request).toJson(QJsonDocument::Compact);
+
+    auto* process = new QProcess(this);
+    m_assistantProcess = process;
+    QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
+    environment.insert(QStringLiteral("PYTHONUTF8"), QStringLiteral("1"));
+    environment.insert(QStringLiteral("PYTHONDONTWRITEBYTECODE"), QStringLiteral("1"));
+    process->setProcessEnvironment(environment);
+    process->setWorkingDirectory(QFileInfo(script).absolutePath());
+
+    connect(process, &QProcess::started, this, [this, process, payload]() {
+        if (m_assistantProcess != process) return;
+        process->write(payload);
+        process->closeWriteChannel();
+        if (m_assistantTimeoutTimer) m_assistantTimeoutTimer->start(8000);
+        if (m_assistantStatus) m_assistantStatus->setText(QStringLiteral("Answering locally…"));
+    });
+    connect(process, &QProcess::readyReadStandardOutput, this, [this, process]() {
+        if (m_assistantProcess != process) return;
+        const QByteArray chunk = process->readAllStandardOutput();
+        if (m_assistantStdout.size() + chunk.size() <= 64 * 1024)
+            m_assistantStdout += chunk;
+        else
+            m_assistantStdout.clear();
+    });
+    connect(process, &QProcess::finished, this,
+        [this, process](int exitCode, QProcess::ExitStatus exitStatus) {
+            if (m_assistantProcess != process) return;
+            if (m_assistantTimeoutTimer) m_assistantTimeoutTimer->stop();
+            const QByteArray trailing = process->readAllStandardOutput();
+            if (m_assistantStdout.size() + trailing.size() <= 64 * 1024)
+                m_assistantStdout += trailing;
+            m_assistantProcess = nullptr;
+            process->deleteLater();
+            setAssistantBusy(false);
+
+            if (m_assistantTimedOut) {
+                handleAssistantUnavailable(QStringLiteral("the local assistant timed out"));
+                return;
+            }
+            if (exitStatus != QProcess::NormalExit || exitCode != 0) {
+                handleAssistantUnavailable(QStringLiteral("the local assistant process exited unexpectedly"));
+                return;
+            }
+            QJsonParseError parseError{};
+            const QJsonDocument doc = QJsonDocument::fromJson(m_assistantStdout, &parseError);
+            if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
+                handleAssistantUnavailable(QStringLiteral("the assistant returned an invalid response"));
+                return;
+            }
+            const QJsonObject response = doc.object();
+            if (response.value(QStringLiteral("request_id")).toString().isEmpty() ||
+                !response.value(QStringLiteral("answer")).isString()) {
+                handleAssistantUnavailable(QStringLiteral("the assistant response was incomplete"));
+                return;
+            }
+            if (m_assistantStatus)
+                m_assistantStatus->setText(QStringLiteral("Local rule-based mode · no cloud connection required"));
+            renderAssistantResponse(response);
+        });
+    connect(process, &QProcess::errorOccurred, this,
+        [this, process](QProcess::ProcessError error) {
+            if (m_assistantProcess != process || error != QProcess::FailedToStart) return;
+            if (m_assistantTimeoutTimer) m_assistantTimeoutTimer->stop();
+            m_assistantProcess = nullptr;
+            process->deleteLater();
+            setAssistantBusy(false);
+            handleAssistantUnavailable(QStringLiteral("Python could not be started"));
+        });
+    process->start(interpreter, arguments);
 }
 
 QWidget* MainWindow::buildPlaceholderPage(const QString& titleText,const QString& message,const QString& glyph)
