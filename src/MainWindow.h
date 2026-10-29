@@ -80,7 +80,7 @@ private:
     void signOut();
     void refreshActivityLog();
     void refreshCertificates();
-    QJsonObject buildAssistantContext();
+    QJsonObject buildAssistantContext(const QString& question);
     void sendAssistantQuestion();
     void clearAssistantConversation();
     void appendAssistantMessage(const QString& role, const QString& text);
