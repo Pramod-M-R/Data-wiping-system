@@ -848,9 +848,10 @@ QWidget* MainWindow::buildAssistantPage()
     return scrollPage(page);
 }
 
-QJsonObject MainWindow::buildAssistantContext()
+QJsonObject MainWindow::buildAssistantContext(const QString& question)
 {
     QJsonObject context;
+    const QString questionLower = question.trimmed().toLower();
     const QStringList screenNames = {
         QStringLiteral("dashboard"), QStringLiteral("devices"),
         QStringLiteral("scan_results"), QStringLiteral("operations"),
@@ -946,10 +947,11 @@ QJsonObject MainWindow::buildAssistantContext()
         context.insert(QStringLiteral("scan_summary"), scan);
 
         QJsonArray scanEntries;
+        QJsonArray matchingScanEntries;
         const QString driveRoot = QStringLiteral("Drive %1:").arg(QChar(selectedDriveLetter));
         std::function<void(QTreeWidgetItem*, const QString&)> collectScanEntries;
         collectScanEntries = [&](QTreeWidgetItem* node, const QString& parentLocation) {
-            if (!node || scanEntries.size() >= 12) return;
+            if (!node) return;
             const QString name = node->text(0).trimmed();
             const QString itemStatus = node->text(2).trimmed();
             QString location = parentLocation;
@@ -964,8 +966,7 @@ QJsonObject MainWindow::buildAssistantContext()
 
             if (!name.isEmpty() &&
                 itemStatus != QStringLiteral("Drive Root") &&
-                itemStatus != QStringLiteral("Recovered") &&
-                scanEntries.size() < 12) {
+                itemStatus != QStringLiteral("Recovered")) {
                 QJsonObject entry;
                 entry.insert(QStringLiteral("file_name"), name.left(120));
                 entry.insert(QStringLiteral("location"), location.left(180));
@@ -978,15 +979,44 @@ QJsonObject MainWindow::buildAssistantContext()
                     entry.insert(QStringLiteral("modified"), modified.left(60));
                 if (itemStatus == QStringLiteral("DELETED"))
                     entry.insert(QStringLiteral("is_deleted"), true);
-                scanEntries.append(entry);
+
+                const bool isMentioned = name.size() >= 3 &&
+                    question.contains(name, Qt::CaseInsensitive);
+                if (isMentioned && matchingScanEntries.size() < 12)
+                    matchingScanEntries.append(entry);
+                else if (scanEntries.size() < 12)
+                    scanEntries.append(entry);
             }
-            for (int child = 0; child < node->childCount() && scanEntries.size() < 12; ++child)
+            for (int child = 0; child < node->childCount(); ++child)
                 collectScanEntries(node->child(child), location);
         };
-        for (int top = 0; top < fileTree->topLevelItemCount() && scanEntries.size() < 12; ++top)
+        for (int top = 0; top < fileTree->topLevelItemCount(); ++top)
             collectScanEntries(fileTree->topLevelItem(top), QString());
-        if (!scanEntries.isEmpty())
-            context.insert(QStringLiteral("scan_entries"), scanEntries);
+
+        // Matching names requested by the user precede the ordinary sample.
+        QJsonArray prioritizedScanEntries = matchingScanEntries;
+        for (const QJsonValue& value : scanEntries) {
+            if (prioritizedScanEntries.size() >= 12)
+                break;
+            if (!value.isObject()) continue;
+            const QJsonObject candidate = value.toObject();
+            bool duplicate = false;
+            for (const QJsonValue& existingValue : prioritizedScanEntries) {
+                if (!existingValue.isObject()) continue;
+                const QJsonObject existing = existingValue.toObject();
+                if (existing.value(QStringLiteral("file_name")).toString() ==
+                        candidate.value(QStringLiteral("file_name")).toString() &&
+                    existing.value(QStringLiteral("location")).toString() ==
+                        candidate.value(QStringLiteral("location")).toString()) {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (!duplicate)
+                prioritizedScanEntries.append(candidate);
+        }
+        if (!prioritizedScanEntries.isEmpty())
+            context.insert(QStringLiteral("scan_entries"), prioritizedScanEntries);
     }
 
     std::vector<FileToWipe> selected;
@@ -1043,11 +1073,31 @@ QJsonObject MainWindow::buildAssistantContext()
         return item;
     };
 
-    // Newest records first. This gives the assistant an audit-history window,
-    // instead of requiring the user to manually restate the last operation.
-    for (int i = records.size() - 1; i >= 0 && activityHistory.size() < 8; --i) {
-        if (!records.at(i).isObject()) continue;
-        const QJsonObject record = records.at(i).toObject();
+    // Prefer records that mention a file name or certificate ID in the question,
+    // then fill the remaining slots with the newest saved Activity Log records.
+    QVector<int> orderedRecordIndexes;
+    auto recordMatchesQuestion = [&](const QJsonObject& record) {
+        const QString fileName = record.value(QStringLiteral("fileName")).toString().trimmed();
+        const QString certificateId = record.value(QStringLiteral("certificateId")).toString().trimmed();
+        return (fileName.size() >= 3 && question.contains(fileName, Qt::CaseInsensitive)) ||
+               (certificateId.size() >= 5 && question.contains(certificateId, Qt::CaseInsensitive));
+    };
+    for (int i = records.size() - 1; i >= 0; --i) {
+        if (records.at(i).isObject() && recordMatchesQuestion(records.at(i).toObject()))
+            orderedRecordIndexes.push_back(i);
+    }
+    for (int i = records.size() - 1; i >= 0; --i) {
+        if (records.at(i).isObject() &&
+            std::find(orderedRecordIndexes.cbegin(), orderedRecordIndexes.cend(), i) == orderedRecordIndexes.cend())
+            orderedRecordIndexes.push_back(i);
+    }
+
+    for (int recordIndex : orderedRecordIndexes) {
+        if (activityHistory.size() >= 8)
+            break;
+        if (!records.at(recordIndex).isObject())
+            continue;
+        const QJsonObject record = records.at(recordIndex).toObject();
         activityHistory.append(activityContext(record));
 
         const QString certificateId = record.value(QStringLiteral("certificateId")).toString().trimmed();
@@ -1071,8 +1121,13 @@ QJsonObject MainWindow::buildAssistantContext()
     }
     if (!activityHistory.isEmpty()) {
         context.insert(QStringLiteral("activity_records"), activityHistory);
-        // The first activity record is the newest actual audit record.
-        context.insert(QStringLiteral("last_recorded_operation"), activityHistory.first().toObject());
+        // Preserve the actual newest operation separately from question-matched records.
+        for (int i = records.size() - 1; i >= 0; --i) {
+            if (!records.at(i).isObject()) continue;
+            context.insert(QStringLiteral("last_recorded_operation"),
+                activityContext(records.at(i).toObject()));
+            break;
+        }
     }
     if (!certificateHistory.isEmpty())
         context.insert(QStringLiteral("certificate_records"), certificateHistory);
@@ -1314,7 +1369,7 @@ void MainWindow::sendAssistantQuestion()
     m_assistantPendingRequestId = QUuid::createUuid().toString(QUuid::WithoutBraces);
     request.insert(QStringLiteral("request_id"), m_assistantPendingRequestId);
     request.insert(QStringLiteral("question"), question);
-    QJsonObject assistantContext = buildAssistantContext();
+    QJsonObject assistantContext = buildAssistantContext(question);
     request.insert(QStringLiteral("context"), assistantContext);
     QByteArray payload = QJsonDocument(request).toJson(QJsonDocument::Compact);
 
