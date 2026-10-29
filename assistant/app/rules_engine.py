@@ -81,7 +81,7 @@ def answer_question(
 
     if intent == "destructive_request":
         return _result(
-            "I can't execute a wipe or recovery from chat. To continue safely, open Operations, confirm the selected USB drive and exact target, verify your backup, then use the application's normal confirmation dialog. If you are unsure about the target, cancel and review Scan Results first.",
+            "I cannot execute a wipe or recovery from chat. To continue safely, open Operations, confirm the selected USB drive and exact target, verify your backup, then use the application's normal confirmation dialog. If you are unsure about the target, cancel and review Scan Results first.",
             "safety_guidance",
             caveats=["Wiping is destructive. Chat text cannot bypass target validation, permissions, or confirmation."],
             navigation=[_nav("Review Scan Results", "scan_results"), _nav("Open Operations", "operations")],
