@@ -147,6 +147,9 @@ def answer_question(
         if isinstance(deleted_count, int) and deleted_count > 0:
             answer += " A deleted directory entry is only a candidate; it does not prove that the original contents are intact or recoverable."
             caveats.append("Results depend on filesystem support, available metadata, and scan coverage.")
+            faq_scan = knowledge.get("faq", {}).get("scan", "")
+            if isinstance(faq_scan, str) and faq_scan:
+                caveats.append(faq_scan)
         if "error" in scan:
             answer += f" Scanner message: {scan['error']}."
         return _result(
@@ -170,7 +173,10 @@ def answer_question(
         return _result(
             f"Recorded ML summary:\n{summary}\n\nThese values are the application's recorded output, not an independent measurement by the assistant.",
             "ml_explanation",
-            caveats=["Treat ML scores as estimates, not guarantees."],
+            caveats=[
+                knowledge.get("faq", {}).get("ml", "Treat ML scores as estimates, not guarantees."),
+                "The assistant repeats the application's recorded result and does not independently calculate missing scores.",
+            ],
             navigation=[_nav("Open Activity Log", "activity_log"), _nav("Open Certificates", "certificates")],
         )
 
@@ -192,7 +198,13 @@ def answer_question(
         return _result(
             result,
             "verification_explanation" if intent == "verification" else "operation_status",
-            caveats=["The assistant does not independently verify the storage device."],
+            caveats=[
+                "The assistant does not independently verify the storage device.",
+                *[
+                    item for item in knowledge.get("verification_limits", {}).get("principles", [])[:3]
+                    if isinstance(item, str)
+                ],
+            ],
             navigation=[_nav("Open Activity Log", "activity_log"), _nav("Open Certificates", "certificates")],
         )
 
@@ -223,7 +235,10 @@ def answer_question(
             "Certificate information supplied by the application:\n" + "\n".join(values) +
             "\n\nThe certificate records application-reported details; its assurance is limited to the checks actually performed and recorded.",
             "certificate_explanation",
-            caveats=["A certificate alone is not a universal guarantee that all copies of data are permanently irrecoverable."],
+            caveats=[
+                knowledge.get("faq", {}).get("certificate", "A certificate is limited to the checks performed and recorded."),
+                "A certificate alone is not a universal guarantee that all copies of data are permanently irrecoverable.",
+            ],
             navigation=[_nav("Open Certificates", "certificates")],
         )
 
@@ -260,8 +275,17 @@ def answer_question(
         )
 
     if intent == "recovery_file_guidance":
+        workflow = knowledge.get("operations", {}).get("recover_file", {})
+        workflow_note = workflow.get("description", "")
+        answer = (
+            "For file recovery, review the specific candidate and its scan details before proceeding. "
+            "Avoid writing new data to the source drive because it may overwrite remnants, and use a destination on a different device. "
+            "A deleted entry or file signature does not prove the file's contents can be recovered, and this context does not confirm that a recovery workflow is enabled in this build."
+        )
+        if isinstance(workflow_note, str) and workflow_note:
+            answer += " Application guidance: " + workflow_note
         return _result(
-            "For file recovery, review the specific candidate and its scan details before proceeding. Avoid writing new data to the source drive because it may overwrite remnants, and use a destination on a different device. A deleted entry or file signature does not prove the file's contents can be recovered, and this context does not confirm that a recovery workflow is enabled in this build.",
+            answer,
             "file_recovery_guidance",
             caveats=["Do not save recovered output back to the source device when preserving other recoverable data matters."],
             navigation=[_nav("Review Scan Results", "scan_results"), _nav("Open Devices", "devices")],
@@ -269,8 +293,17 @@ def answer_question(
         )
 
     if intent == "recovery_drive_guidance":
+        workflow = knowledge.get("operations", {}).get("recover_drive", {})
+        workflow_note = workflow.get("description", "")
+        answer = (
+            "For drive recovery, first review the supported scan result for the intended source device. "
+            "Avoid writing to the source and use a separate destination device for recovered output. "
+            "Scan coverage and filesystem support limit what may be found; this context does not confirm that a full-drive recovery workflow is enabled, so I cannot promise that all files can be restored."
+        )
+        if isinstance(workflow_note, str) and workflow_note:
+            answer += " Application guidance: " + workflow_note
         return _result(
-            "For drive recovery, first review the supported scan result for the intended source device. Avoid writing to the source and use a separate destination device for recovered output. Scan coverage and filesystem support limit what may be found; this context does not confirm that a full-drive recovery workflow is enabled, so I cannot promise that all files can be restored.",
+            answer,
             "drive_recovery_guidance",
             caveats=["Do not overwrite the source drive while attempting recovery."],
             navigation=[_nav("Open Devices", "devices"), _nav("Review Scan Results", "scan_results")],
@@ -291,15 +324,29 @@ def answer_question(
             "everything", "all data", "entire drive", "whole drive", "full drive",
             "entire usb", "whole usb", "full usb", "entire disk", "whole disk",
         )):
+            workflow = knowledge.get("operations", {}).get("full_drive_wipe", {})
+            workflow_note = workflow.get("description", "")
+            answer = workflow_note if isinstance(workflow_note, str) and workflow_note else (
+                "The full-drive wipe workflow can destroy data on the selected device. Confirm the drive identity and back up anything you need."
+            )
+            answer += " The assistant will not start the wipe; use the application's normal confirmation dialog."
             return _result(
-                "If your goal is to erase the whole USB drive, the full-drive wipe workflow is the relevant option. It can destroy data on the selected device. Confirm the exact drive identity and back up anything you need before entering the normal confirmation dialog. I will not start the wipe.",
+                answer,
                 "operation_guidance",
                 caveats=["Do not proceed if the selected drive, its capacity, or its identity is uncertain."],
                 navigation=[_nav("Open Devices", "devices"), _nav("Open Operations", "operations")],
                 requires_action=True,
             )
+        workflow = knowledge.get("operations", {}).get("single_file_wipe", {})
+        workflow_note = workflow.get("description", "")
+        answer = (
+            "For one particular file, review the exact entry in Scan Results and use the application's file-selection workflow. "
+            "For the full USB drive, the full-drive wipe is a separate destructive workflow. This assistant cannot select a target or start either operation."
+        )
+        if isinstance(workflow_note, str) and workflow_note:
+            answer += " Application guidance: " + workflow_note
         return _result(
-            "For one particular file, review the exact entry in Scan Results and use the application's file-selection workflow. For the full USB drive, the full-drive wipe is a separate destructive workflow. This assistant cannot select a target or start either operation.",
+            answer,
             "operation_guidance",
             caveats=["Per-file erasure reliability depends on filesystem metadata and storage technology."],
             navigation=[_nav("Review Scan Results", "scan_results"), _nav("Open Operations", "operations")],
