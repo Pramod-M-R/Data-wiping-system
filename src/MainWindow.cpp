@@ -1152,7 +1152,7 @@ void MainWindow::onWipeClicked() {
         maxReadBytes
     );
 
-    if (!beforeRead.success) {
+    if (!beforeRead.success || beforeRead.data.empty()) {
         const QString auditPath = auditPathForFile(file, drive.letter);
         auditOperation(QString::fromStdString(file.name), auditPath,
             QStringLiteral("Deleted Files section / physical extents"),
@@ -1163,8 +1163,9 @@ void MainWindow::onWipeClicked() {
         QMessageBox::warning(
             this,
             "BEFORE Fingerprint Failed",
-            QString("Could not read original deleted-file data:\n%1")
-                .arg(QString::fromStdString(beforeRead.errorMessage))
+            QString("Could not read original deleted-file data or the read returned no bytes:\n%1")
+                .arg(QString::fromStdString(beforeRead.errorMessage.empty()
+                    ? std::string("The pre-wipe byte buffer was empty.") : beforeRead.errorMessage))
         );
         continue;
     }
@@ -1284,7 +1285,7 @@ auto afterRead = engine.readExtents(
     file.fileEntry.sizeBytes
 );
 
-if (afterRead.success) {
+if (afterRead.success && !afterRead.data.empty()) {
     FeatureVector afterFeatures =
         FeatureExtractor::extract(afterRead.data);
 
@@ -1389,14 +1390,15 @@ mlDataset[file.name] = sample;
         "AFTER Fingerprint Failed",
         QString("Could not read wiped data for:\n%1\n\nReason: %2")
             .arg(QString::fromStdString(file.name))
-            .arg(QString::fromStdString(afterRead.errorMessage))
+            .arg(QString::fromStdString(afterRead.errorMessage.empty()
+                ? std::string("The post-wipe byte buffer was empty.") : afterRead.errorMessage))
     );
 }
 
 const QString deletedAuditPath = auditPathForFile(file, drive.letter);
 QStringList mlDetails;
-if (!afterRead.success) {
-    mlDetails << QStringLiteral("Similarity score: Not available (post-wipe feature extraction failed)");
+if (!afterRead.success || afterRead.data.empty()) {
+    mlDetails << QStringLiteral("Similarity score: Not available (post-wipe feature extraction failed or returned no bytes)");
 } else if (similarityScoreFile == file.name) {
     mlDetails << QStringLiteral("Similarity score: %1% (normalized before/after feature comparison)")
         .arg(similarityScore * 100.0, 0, 'f', 2);
@@ -1408,9 +1410,10 @@ mlDetails << QStringLiteral("Recoverability risk: Not assessed");
 mlDetails << QStringLiteral("Recommended next wipe method: Not available — no validated recovery model");
 mlDetails << QStringLiteral("Reason: no verified recovered/not-recovered training labels are configured. Feature similarity alone cannot establish whether original data is recoverable.");
 const QString deletedMlResults = mlDetails.join(QStringLiteral("\n"));
-const QString mlError = afterRead.success ? QString() :
-    QStringLiteral("Post-wipe data read failed; feature analysis could not be completed: %1")
-        .arg(QString::fromStdString(afterRead.errorMessage));
+const QString mlError = (afterRead.success && !afterRead.data.empty()) ? QString() :
+    QStringLiteral("Post-wipe data read failed or returned no bytes; feature analysis could not be completed: %1")
+        .arg(QString::fromStdString(afterRead.errorMessage.empty()
+            ? std::string("The post-wipe byte buffer was empty.") : afterRead.errorMessage));
 auditOperation(QString::fromStdString(file.name), deletedAuditPath,
     QStringLiteral("Deleted Files"), wipeMethodCombo->currentText(),
     passesForMethod(methodIndex), true,
