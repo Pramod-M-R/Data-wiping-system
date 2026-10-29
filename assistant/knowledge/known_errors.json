@@ -1,0 +1,43 @@
+{
+  "no physical extents": {
+    "explanation": "The scanner found a deleted entry but did not obtain a trustworthy list of storage extents for that file. A visible filename alone does not identify the exact physical bytes to overwrite.",
+    "safe_steps": [
+      "Do not approve an inferred range on a drive containing important data.",
+      "Check the filesystem type and rescan the intended drive.",
+      "If the application reports an inferred contiguous range, understand that the old file may have been fragmented and the range may include other deleted data.",
+      "Stop if the selected target or its physical location is uncertain."
+    ]
+  },
+  "access denied": {
+    "explanation": "Windows denied access to the requested file or device. The current context alone does not establish whether this was caused by permissions, a lock, or device state.",
+    "safe_steps": [
+      "Confirm the intended device is connected and selected.",
+      "Close other applications that may be using the file or device.",
+      "Use only the application's normal permission and confirmation workflow."
+    ]
+  },
+  "verification failed": {
+    "explanation": "The application's verification check did not report a successful match. Do not treat the operation as verified.",
+    "safe_steps": [
+      "Preserve the recorded error and certificate.",
+      "Do not repeat a destructive operation until the exact target and cause are understood.",
+      "Review the Activity Log and the operation's verification details."
+    ]
+  },
+  "post-wipe data read failed": {
+    "explanation": "The application could not read data after the operation, so it may not have been able to complete its before/after analysis. This is not itself proof of success or failure.",
+    "safe_steps": [
+      "Review the exact operation status and verification result.",
+      "Inspect the recorded error in Activity Log.",
+      "Avoid claiming a recoverability score if the required after-wipe features were not produced."
+    ]
+  },
+  "permission denied": {
+    "explanation": "The operating system refused the requested access. More specific cause information is needed before choosing a fix.",
+    "safe_steps": [
+      "Check device connectivity and application permissions.",
+      "Close other applications using the target.",
+      "Do not bypass the application's target checks or confirmation prompts."
+    ]
+  }
+}
