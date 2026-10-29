@@ -124,9 +124,11 @@ private:
     QVector<QPushButton*> m_assistantSuggestionButtons;
     QVector<QPushButton*> m_assistantNavigationButtons;
     QString m_assistantPendingQuestion;
+    QString m_assistantPendingRequestId;
     QByteArray m_assistantStdout;
     bool m_assistantTimedOut = false;
     int m_lastNonAssistantPageIndex = 0;
+    char m_assistantScannedDriveLetter = 0;
 
 std::map<std::string, FileEntry> deletedFileEntries;
 std::map<std::string, FeatureVector> beforeFingerprints;
