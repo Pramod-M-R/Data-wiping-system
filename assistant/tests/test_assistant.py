@@ -209,6 +209,27 @@ class AssistantTests(unittest.TestCase):
         self.assertIn("notes.txt", response["answer"])
         self.assertIn("deleted_photo.jpg", response["answer"])
 
+    def test_legacy_ml_question_uses_saved_hover_tooltip_details(self):
+        response = self.request("Explain the legacy result and hover details for old_file.pdf", {
+            "activity_records": [{
+                "file_name": "old_file.pdf",
+                "ml_summary": "Legacy result — previous score is not valid",
+                "ml_details": "Similarity score: 27.40%\nRecoverability score: 54.20%\nRisk level: MEDIUM\nRecommendation: DoD 3-Pass",
+                "outcome": "Wiped successfully",
+                "certificate_id": "DG-LEGACY-1",
+            }],
+        })
+        self.assertEqual(response["answer_type"], "history_lookup")
+        self.assertIn("Similarity score: 27.40%", response["answer"])
+        self.assertIn("Recoverability score: 54.20%", response["answer"])
+        self.assertIn("not a validated current evaluation", response["answer"])
+
+    def test_previous_wipe_name_phrase_routes_to_activity_history(self):
+        self.assertEqual(
+            classify_intent("Name the previously wiped file name"),
+            "history_lookup",
+        )
+
     def test_multi_record_history_answer_uses_activity_log(self):
         response = self.request("List my recent wipes", {
             "activity_records": [
@@ -268,13 +289,14 @@ class AssistantTests(unittest.TestCase):
     def test_extended_context_keeps_recent_records_and_scan_entries(self):
         clean = build_context({
             "screen": "assistant",
-            "activity_records": [{"file_name": "recent.txt", "outcome": "Wiped successfully", "raw_data": "do not pass"}],
+            "activity_records": [{"file_name": "recent.txt", "outcome": "Wiped successfully", "ml_details": "Similarity score: 20%", "raw_data": "do not pass"}],
             "certificate_records": [{"certificate_id": "DG-1", "pdf_ready": True}],
             "scan_entries": [{"file_name": "visible.txt", "location": "Drive E: > visible.txt", "status": "Existing"}],
             "devices": [{"display_name": "USB E:", "serial_number": "private-serial"}],
         })
         encoded = json.dumps(clean)
         self.assertIn("recent.txt", encoded)
+        self.assertIn("Similarity score: 20%", encoded)
         self.assertIn("DG-1", encoded)
         self.assertIn("visible.txt", encoded)
         self.assertNotIn("do not pass", encoded)
