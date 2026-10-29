@@ -229,7 +229,7 @@ class AssistantTests(unittest.TestCase):
             ],
         })
         self.assertEqual(response["answer_type"], "history_lookup")
-        self.assertIn("relevant and recent records supplied by Activity Log", response["answer"].lower())
+        self.assertIn("relevant and recent records supplied by activity log", response["answer"].lower())
         self.assertIn("first.txt", response["answer"])
         self.assertIn("second.bin", response["answer"])
 
