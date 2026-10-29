@@ -6,7 +6,7 @@ import re
 _PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
     # Resolve certificate-specific questions before the broader "prove/verification" intent.
     ("certificate", (
-        r"\b(certificates?|pdfs?|proof of wipe|wipe proof|certificate ids?)\b",
+        r"\b(certificates?|proof of wipe|wipe proof|certificate ids?)\b|(?<![.\w])pdfs?(?![.\w])",
     )),
     # Route explicit whole-drive goals to guidance rather than the generic destructive-request response.
     ("operation_selection", (
