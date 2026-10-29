@@ -193,7 +193,7 @@ class AssistantTests(unittest.TestCase):
                  "error_message": "No physical extents were found."},
             ],
         })
-        self.assertEqual(response["answer_type"], "operation_status")
+        self.assertEqual(response["answer_type"], "history_lookup")
         self.assertIn("older.bin", response["answer"])
         self.assertIn("No physical extents", response["answer"])
 
