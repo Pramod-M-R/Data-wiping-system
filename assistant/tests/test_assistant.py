@@ -224,6 +224,24 @@ class AssistantTests(unittest.TestCase):
         self.assertIn("Recoverability score: 54.20%", response["answer"])
         self.assertIn("not a validated current evaluation", response["answer"])
 
+    def test_ml_query_without_filename_reads_latest_saved_hover_details(self):
+        response = self.request("Explain the latest ML results shown on hover", {
+            "last_recorded_operation": {
+                "file_name": "latest.bin",
+                "ml_summary": "Legacy result — previous score is not valid",
+                "ml_details": "Similarity score: 18.75%\nRecoverability score: 42.50%\nRisk level: MEDIUM\nRecommendation: DoD 3-Pass",
+            },
+            "activity_records": [{
+                "file_name": "latest.bin",
+                "ml_summary": "Legacy result — previous score is not valid",
+                "ml_details": "Similarity score: 18.75%\nRecoverability score: 42.50%\nRisk level: MEDIUM\nRecommendation: DoD 3-Pass",
+            }],
+        })
+        self.assertEqual(response["answer_type"], "ml_explanation")
+        self.assertIn("Similarity score: 18.75%", response["answer"])
+        self.assertIn("Recoverability score: 42.50%", response["answer"])
+        self.assertIn("historical values", response["answer"])
+
     def test_previous_wipe_name_phrase_routes_to_activity_history(self):
         self.assertEqual(
             classify_intent("Name the previously wiped file name"),
