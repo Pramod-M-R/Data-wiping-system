@@ -39,6 +39,10 @@
 #include <QTimeZone>
 #include <QColor>
 #include <QDir>
+#include <QPdfWriter>
+#include <QTextDocument>
+#include <QPageSize>
+#include <QPageLayout>
 #include <map>
 #include <cmath>
 #include "RandomForest.h"
@@ -243,6 +247,31 @@ This certificate summarizes the result reported by the local DataGuard applicati
     return html;
 }
 
+bool writeCertificatePdf(const QString& pdfPath, const QJsonObject& record)
+{
+    const QFileInfo info(pdfPath);
+    if (!QDir().mkpath(info.absolutePath()))
+        return false;
+
+    {
+        QPdfWriter writer(pdfPath);
+        writer.setTitle(QStringLiteral("DataGuard Wipe Certificate - %1")
+            .arg(record.value(QStringLiteral("certificateId")).toString()));
+        writer.setCreator(QStringLiteral("DataGuard Secure Data Wiping System"));
+        writer.setResolution(120);
+        writer.setPageSize(QPageSize(QPageSize::A4));
+        writer.setPageMargins(QMarginsF(14, 14, 14, 14), QPageLayout::Millimeter);
+
+        QTextDocument document;
+        document.setDocumentMargin(0.0);
+        document.setHtml(certificateHtml(record));
+        document.print(&writer);
+    }
+
+    const QFileInfo written(pdfPath);
+    return written.exists() && written.isFile() && written.size() > 0;
+}
+
 void styleAuditTable(QTableWidget* table)
 {
     table->setAlternatingRowColors(true);
@@ -436,41 +465,44 @@ QWidget* MainWindow::buildCertificatesPage()
     auto* box = new QVBoxLayout(card);
     box->setContentsMargins(16,14,16,16);
     box->setSpacing(10);
-    box->addWidget(heading(QStringLiteral("Wipe Certificates"), card));
-    box->addWidget(bodyText(QStringLiteral("Every recorded wipe attempt has a matching HTML certificate. Select a row and open it for the full operation details and ML results."), card));
+    box->addWidget(heading(QStringLiteral("PDF Wipe Certificates"), card));
+    box->addWidget(bodyText(QStringLiteral("Each wipe attempt has a PDF certificate named with its Certificate ID. Select a certificate and open the PDF for the full timestamp, operator, file location, wipe method, outcome, verification and ML results."), card));
     auto* controls = new QHBoxLayout;
     controls->addStretch();
     auto* refresh = new QPushButton(QStringLiteral("Refresh Certificates"), card);
     stylePrimaryButton(refresh);
     connect(refresh, &QPushButton::clicked, this, &MainWindow::refreshCertificates);
     controls->addWidget(refresh);
-    auto* open = new QPushButton(QStringLiteral("Open Certificate"), card);
+    auto* open = new QPushButton(QStringLiteral("Open PDF Certificate"), card);
     stylePrimaryButton(open);
     connect(open, &QPushButton::clicked, this, [this]() {
-        if (!m_certificatesTable || m_certificatesTable->currentRow() < 0) return;
+        if (!m_certificatesTable || m_certificatesTable->currentRow() < 0) {
+            QMessageBox::information(this, QStringLiteral("Select a certificate"),
+                QStringLiteral("Select a certificate row first."));
+            return;
+        }
         const int row = m_certificatesTable->currentRow();
         const QString path = m_certificatesTable->item(row, 0)
             ? m_certificatesTable->item(row, 0)->data(Qt::UserRole).toString() : QString();
         if (!path.isEmpty() && QFileInfo::exists(path))
             QDesktopServices::openUrl(QUrl::fromLocalFile(path));
         else
-            QMessageBox::warning(this, QStringLiteral("Certificate unavailable"),
-                QStringLiteral("The certificate file could not be found for the selected record."));
+            QMessageBox::warning(this, QStringLiteral("PDF unavailable"),
+                QStringLiteral("The PDF could not be generated. Refresh the list and check write access to the DataGuard application-data folder."));
     });
     controls->addWidget(open);
     box->addLayout(controls);
     m_certificatesTable = new QTableWidget(card);
-    m_certificatesTable->setColumnCount(8);
+    m_certificatesTable->setColumnCount(6);
     m_certificatesTable->setHorizontalHeaderLabels({
+        QStringLiteral("Certificate ID"), QStringLiteral("PDF file name"),
         QStringLiteral("Date & time (IST)"), QStringLiteral("Signed-in user"),
-        QStringLiteral("File / drive"), QStringLiteral("Location"),
-        QStringLiteral("Wipe method"), QStringLiteral("Result"),
-        QStringLiteral("ML analysis"), QStringLiteral("Certificate ID")});
+        QStringLiteral("File / drive"), QStringLiteral("PDF status")});
     styleAuditTable(m_certificatesTable);
     auto* header = m_certificatesTable->horizontalHeader();
     header->setSectionResizeMode(QHeaderView::Interactive);
-    const int widths[] = {150,105,135,170,120,165,210,155};
-    for (int i=0; i<8; ++i) m_certificatesTable->setColumnWidth(i,widths[i]);
+    const int widths[] = {205,225,165,125,190,115};
+    for (int i=0; i<6; ++i) m_certificatesTable->setColumnWidth(i,widths[i]);
     m_certificatesTable->setMinimumHeight(340);
     connect(m_certificatesTable, &QTableWidget::cellDoubleClicked, this, [this](int row, int) {
         if (!m_certificatesTable || !m_certificatesTable->item(row, 0)) return;
@@ -524,35 +556,53 @@ void MainWindow::refreshActivityLog()
 void MainWindow::refreshCertificates()
 {
     if (!m_certificatesTable) return;
-    const QJsonArray records = readAuditRecords();
+    QJsonArray records = readAuditRecords();
+    bool recordsChanged = false;
+    const QString certificateDirectory = QDir(auditRootPath()).filePath(QStringLiteral("Certificates"));
+    QDir().mkpath(certificateDirectory);
+
+    // Generate missing PDFs and migrate prior HTML certificate references.
+    for (int i = 0; i < records.size(); ++i) {
+        QJsonObject record = records.at(i).toObject();
+        const QString certificateId = record.value(QStringLiteral("certificateId")).toString().trimmed();
+        if (certificateId.isEmpty()) continue;
+
+        const QString pdfPath = QDir(certificateDirectory).filePath(certificateId + QStringLiteral(".pdf"));
+        bool pdfExists = QFileInfo(pdfPath).exists() && QFileInfo(pdfPath).size() > 0;
+        if (!pdfExists)
+            pdfExists = writeCertificatePdf(pdfPath, record);
+
+        const QString storedPath = record.value(QStringLiteral("certificatePath")).toString();
+        const QString desiredPath = pdfExists ? pdfPath : QString();
+        if (storedPath != desiredPath || record.contains(QStringLiteral("certificateError"))) {
+            record.insert(QStringLiteral("certificatePath"), desiredPath);
+            if (pdfExists) record.remove(QStringLiteral("certificateError"));
+            else record.insert(QStringLiteral("certificateError"), QStringLiteral("PDF certificate generation failed."));
+            record.insert(QStringLiteral("recordDigestSha256"), auditRecordDigest(record));
+            records.replace(i, record);
+            recordsChanged = true;
+        }
+    }
+    if (recordsChanged && !writeAuditRecords(records)) {
+        QMessageBox::warning(this, QStringLiteral("Certificate index update failed"),
+            QStringLiteral("PDF files may exist, but the certificate index could not be updated. Check write access to the DataGuard application-data folder."));
+    }
+
     m_certificatesTable->setRowCount(static_cast<int>(records.size()));
     int row = 0;
     for (int i = static_cast<int>(records.size()) - 1; i >= 0; --i, ++row) {
-        const QJsonObject r = records.at(i).toObject();
-        const QString certPath = r.value(QStringLiteral("certificatePath")).toString();
-        const QString error = r.value(QStringLiteral("errorMessage")).toString();
-
-        // Refresh earlier certificates with the current human-readable IST template.
-        if (!certPath.isEmpty() && QFileInfo::exists(certPath)) {
-            const QByteArray updatedHtml = certificateHtml(r).toUtf8();
-            QSaveFile updatedCertificate(certPath);
-            if (updatedCertificate.open(QIODevice::WriteOnly)) {
-                if (updatedCertificate.write(updatedHtml) == updatedHtml.size())
-                    updatedCertificate.commit();
-                else
-                    updatedCertificate.cancelWriting();
-            }
-        }
-
+        const QJsonObject record = records.at(i).toObject();
+        const QString certificateId = record.value(QStringLiteral("certificateId")).toString();
+        const QString pdfPath = record.value(QStringLiteral("certificatePath")).toString();
+        const bool pdfAvailable = !pdfPath.isEmpty() &&
+            QFileInfo(pdfPath).exists() && QFileInfo(pdfPath).size() > 0;
         const QStringList values = {
-            displayTimestamp(r),
-            r.value(QStringLiteral("user")).toString(),
-            r.value(QStringLiteral("fileName")).toString(),
-            conciseLocation(r),
-            readableMethod(r),
-            readableOutcome(r),
-            mlTableSummary(r),
-            r.value(QStringLiteral("certificateId")).toString()
+            certificateId,
+            certificateId.isEmpty() ? QStringLiteral("—") : certificateId + QStringLiteral(".pdf"),
+            displayTimestamp(record),
+            record.value(QStringLiteral("user")).toString(),
+            record.value(QStringLiteral("fileName")).toString(),
+            pdfAvailable ? QStringLiteral("PDF ready") : QStringLiteral("PDF unavailable")
         };
         for (int col = 0; col < values.size(); ++col) {
             auto* item = new QTableWidgetItem(values.at(col));
@@ -560,14 +610,12 @@ void MainWindow::refreshCertificates()
             item->setToolTip(values.at(col));
             m_certificatesTable->setItem(row, col, item);
         }
-        m_certificatesTable->item(row, 0)->setData(Qt::UserRole, certPath);
+        m_certificatesTable->item(row, 0)->setData(Qt::UserRole, pdfPath);
         m_certificatesTable->item(row, 5)->setForeground(QColor(
-            r.value(QStringLiteral("status")).toString() == QStringLiteral("SUCCESS")
-                ? QStringLiteral("#aaf0c0") : QStringLiteral("#ffb0b8")));
-        if (!error.isEmpty())
-            m_certificatesTable->item(row, 5)->setToolTip(values.at(5) + QStringLiteral("\nDetails: ") + error);
-        const QString rawMl = r.value(QStringLiteral("mlResults")).toString();
-        if (!rawMl.isEmpty()) m_certificatesTable->item(row, 6)->setToolTip(rawMl);
+            pdfAvailable ? QStringLiteral("#aaf0c0") : QStringLiteral("#ffb0b8")));
+        const QString ml = record.value(QStringLiteral("mlResults")).toString();
+        if (!ml.isEmpty()) m_certificatesTable->item(row, 4)->setToolTip(
+            record.value(QStringLiteral("fileName")).toString() + QStringLiteral("\nML: ") + ml);
     }
     m_certificatesTable->resizeRowsToContents();
 }
@@ -587,8 +635,7 @@ void MainWindow::recordWipeActivity(const QString& fileName, const QString& file
              QUuid::createUuid().toString(QUuid::WithoutBraces).left(8).toUpper());
     const QString certificateDirectory = QDir(auditRootPath()).filePath(QStringLiteral("Certificates"));
     QDir().mkpath(certificateDirectory);
-    const QString certificatePath = QDir(certificateDirectory).filePath(
-        QStringLiteral("Certificate_%1.html").arg(certificateId));
+    const QString certificatePath = QDir(certificateDirectory).filePath(certificateId + QStringLiteral(".pdf"));
 
     QJsonObject record;
     record.insert(QStringLiteral("timestamp"), timestamp);
@@ -611,14 +658,10 @@ void MainWindow::recordWipeActivity(const QString& fileName, const QString& file
     record.insert(QStringLiteral("certificatePath"), certificatePath);
     record.insert(QStringLiteral("recordDigestSha256"), auditRecordDigest(record));
 
-    const QByteArray html = certificateHtml(record).toUtf8();
-    QSaveFile certificateFile(certificatePath);
-    const bool certificateSaved = certificateFile.open(QIODevice::WriteOnly)
-        && certificateFile.write(html) == html.size()
-        && certificateFile.commit();
+    const bool certificateSaved = writeCertificatePdf(certificatePath, record);
     if (!certificateSaved) {
         record.insert(QStringLiteral("certificatePath"), QString());
-        record.insert(QStringLiteral("certificateError"), QStringLiteral("Certificate HTML could not be written."));
+        record.insert(QStringLiteral("certificateError"), QStringLiteral("PDF certificate could not be written."));
         record.insert(QStringLiteral("recordDigestSha256"), auditRecordDigest(record));
     }
 
@@ -629,8 +672,8 @@ void MainWindow::recordWipeActivity(const QString& fileName, const QString& file
             QStringLiteral("The operation completed, but DataGuard could not persist the activity record to the application data directory."));
     }
     if (!certificateSaved) {
-        QMessageBox::warning(this, QStringLiteral("Certificate generation failed"),
-            QStringLiteral("The activity was recorded, but the HTML certificate could not be saved. Check write access to the DataGuard application data directory."));
+        QMessageBox::warning(this, QStringLiteral("PDF certificate generation failed"),
+            QStringLiteral("The activity was recorded, but its PDF certificate could not be saved. Check write access to the DataGuard application-data folder."));
     }
 }
 
