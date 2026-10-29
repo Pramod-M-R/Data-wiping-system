@@ -863,6 +863,12 @@ QJsonObject MainWindow::buildAssistantContext()
     context.insert(QStringLiteral("screen"), screenNames.at(screenIndex));
     if (!m_signedInUser.trimmed().isEmpty())
         context.insert(QStringLiteral("signed_in_user"), m_signedInUser.trimmed().left(120));
+    QJsonObject settingsContext;
+    if (!m_signedInUser.trimmed().isEmpty())
+        settingsContext.insert(QStringLiteral("signed_in_user"), m_signedInUser.trimmed().left(120));
+    settingsContext.insert(QStringLiteral("persistence"), QStringLiteral("Local SQLite"));
+    settingsContext.insert(QStringLiteral("application_name"), QCoreApplication::applicationName());
+    context.insert(QStringLiteral("settings"), settingsContext);
     char selectedDriveLetter = 0;
 
     // Read-only device summary. Do not expose raw physical paths or serial numbers.
