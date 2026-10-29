@@ -1061,7 +1061,7 @@ void MainWindow::addAssistantNavigationButtons(const QJsonArray& suggestions)
         const QString label = item.value(QStringLiteral("label")).toString().left(80);
         if (!destinations.contains(destination) || label.isEmpty()) continue;
         const int index = destinations.value(destination);
-        auto* button = new QPushButton(label, this);
+        auto* button = new QPushButton(label, m_assistantNavigationLayout->parentWidget());
         button->setCursor(Qt::PointingHandCursor);
         button->setStyleSheet(QStringLiteral(
             "QPushButton{color:#eaf5ff;background:rgba(20,47,75,190);border:1px solid rgba(112,175,213,75);border-radius:8px;padding:7px 10px;}"));
