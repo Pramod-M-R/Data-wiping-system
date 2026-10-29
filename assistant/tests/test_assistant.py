@@ -209,6 +209,15 @@ class AssistantTests(unittest.TestCase):
         self.assertIn("notes.txt", response["answer"])
         self.assertIn("deleted_photo.jpg", response["answer"])
 
+    def test_account_question_uses_current_session_context(self):
+        response = self.request("Who am I logged in as?", {
+            "signed_in_user": "current-user",
+            "settings": {"signed_in_user": "current-user", "persistence": "Local SQLite"},
+        })
+        self.assertEqual(response["answer_type"], "account_information")
+        self.assertIn("current-user", response["answer"])
+        self.assertIn("Local SQLite", response["answer"])
+
     def test_device_question_can_list_inventory(self):
         response = self.request("How many devices are connected?", {
             "devices": [
