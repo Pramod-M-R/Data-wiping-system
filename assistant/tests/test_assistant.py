@@ -209,6 +209,30 @@ class AssistantTests(unittest.TestCase):
         self.assertIn("notes.txt", response["answer"])
         self.assertIn("deleted_photo.jpg", response["answer"])
 
+    def test_multi_record_history_answer_uses_activity_log(self):
+        response = self.request("List my recent wipes", {
+            "activity_records": [
+                {
+                    "file_name": "first.txt",
+                    "location": "Drive E: > Deleted Files > first.txt",
+                    "outcome": "Wiped successfully (verified)",
+                    "method": "Three passes (DoD)",
+                    "timestamp": "30 Oct 2026, 03:40 AM IST",
+                },
+                {
+                    "file_name": "second.bin",
+                    "location": "Drive E: > Deleted Files > second.bin",
+                    "outcome": "Wipe failed / not completed",
+                    "method": "Single pass (zero fill)",
+                    "timestamp": "29 Oct 2026, 10:00 PM IST",
+                },
+            ],
+        })
+        self.assertEqual(response["answer_type"], "history_lookup")
+        self.assertIn("relevant and recent records supplied by Activity Log", response["answer"].lower())
+        self.assertIn("first.txt", response["answer"])
+        self.assertIn("second.bin", response["answer"])
+
     def test_account_question_uses_current_session_context(self):
         response = self.request("Who am I logged in as?", {
             "signed_in_user": "current-user",
@@ -239,6 +263,7 @@ class AssistantTests(unittest.TestCase):
         self.assertEqual(response["answer_type"], "certificate_list")
         self.assertIn("DG-C1", response["answer"])
         self.assertIn("sample2.txt", response["answer"])
+        self.assertIn("Relevant and recent certificate records", response["answer"])
 
     def test_extended_context_keeps_recent_records_and_scan_entries(self):
         clean = build_context({
