@@ -16,6 +16,7 @@ from context_builder import build_context
 from controller import RequestError, handle_request
 from intents import classify_intent
 from response_validator import validate_response
+from intents import classify_intent
 
 
 class AssistantTests(unittest.TestCase):
@@ -116,6 +117,42 @@ class AssistantTests(unittest.TestCase):
             self.request(" ")
         with self.assertRaises(RequestError):
             self.request("x" * 2001)
+
+
+    def test_certificate_questions_take_certificate_context(self):
+        response = self.request("What does this certificate prove?", {
+            "screen": "certificates",
+            "certificate": {
+                "certificate_id": "DG-CERT-7",
+                "user": "fixture",
+                "file_name": "sample.bin",
+                "status": "SUCCESS",
+                "verification": "PASSED",
+            },
+        })
+        self.assertIn("DG-CERT-7", response["answer"])
+        self.assertIn("does not", response["answer"].lower())
+
+    def test_whole_drive_goal_routes_to_guidance_not_execution(self):
+        response = self.request("I want to erase the entire USB drive")
+        self.assertEqual(response["answer_type"], "operation_guidance")
+        self.assertTrue(response["requires_user_action"])
+        self.assertTrue(any(
+            item["destination"] == "operations"
+            for item in response["suggested_navigation"]
+        ))
+        self.assertIn("will not start", response["answer"].lower())
+
+    def test_file_and_drive_recovery_are_distinguished(self):
+        file_answer = self.request("How can I recover a file?")
+        drive_answer = self.request("How can I recover a USB drive?")
+        self.assertEqual(file_answer["answer_type"], "file_recovery_guidance")
+        self.assertEqual(drive_answer["answer_type"], "drive_recovery_guidance")
+        self.assertIn("different device", file_answer["answer"])
+        self.assertIn("full-drive recovery workflow", drive_answer["answer"])
+
+    def test_certificate_intent_precedes_generic_verification_intent(self):
+        self.assertEqual(classify_intent("What does my certificate prove?"), "certificate")
 
     def test_process_protocol_emits_single_json_response(self):
         payload = json.dumps({
