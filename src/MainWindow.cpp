@@ -1084,6 +1084,24 @@ void MainWindow::onWipeClicked() {
 
         if (reply != QMessageBox::Yes) return;
 
+        QStringList inferredFiles;
+        for (const auto& selectedFile : selectedFiles) {
+            if (selectedFile.isDeleted && selectedFile.fileEntry.extentMappingInferred)
+                inferredFiles << QString::fromStdString(selectedFile.name);
+        }
+        if (!inferredFiles.isEmpty()) {
+            const auto inferredReply = QMessageBox::warning(
+                this,
+                QStringLiteral("Confirm inferred deleted-file location"),
+                QStringLiteral("The FAT32 allocation chain for the following deleted file(s) is no longer available:\n\n%1\n\nDataGuard found a contiguous range whose clusters are currently marked free in every FAT copy. This is a guarded best-effort mapping, but it cannot prove that the range contains only this file's old data; it may include contents from another deleted file.\n\nContinue with this inferred range?")
+                    .arg(inferredFiles.join(QStringLiteral("\n"))),
+                QMessageBox::Yes | QMessageBox::No,
+                QMessageBox::No);
+            if (inferredReply != QMessageBox::Yes)
+                return;
+        }
+
+
         wipeButton->setEnabled(false);
         refreshButton->setEnabled(false);
         progressBar->setValue(0);
