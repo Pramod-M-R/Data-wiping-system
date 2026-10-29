@@ -118,28 +118,14 @@ struct MLDatasetSample {
     std::vector<double> afterFeatures;
     std::vector<double> differences;
     int wipeMethod = 0;
-    bool actualRecovery = false;
 };
 
 std::map<std::string, MLDatasetSample> mlDataset;
-std::vector<std::vector<double>> similarityTrainingData;
-std::vector<double> similarityTrainingLabels;
-bool similarityModelTrained = false;
-bool similarityModelEvaluated = false;
-bool similarityModelSaved = false;
+// Per-file feature similarity is computed from measured BEFORE/AFTER feature
+// vectors. Recoverability is not predicted until real labelled recovery
+// outcomes and a validated model are available.
 double similarityScore = 0.0;
 std::string similarityScoreFile;
-std::vector<std::vector<double>> recoverabilityTrainingData;
-std::vector<double> recoverabilityTrainingLabels;
-bool recoverabilityModelTrained = false;
-bool recoverabilityModelEvaluated = false;
-bool recoverabilityModelSaved = false;
-double recoverabilityScore = 0.0;
-bool recoverabilityScoreGenerated = false;
-int riskLevel = 0;
-double mediumRiskThreshold = 0.30;
-double highRiskThreshold = 0.60;
-std::string wipeRecommendation;
     // Helper to collect checked files
     void collectSelectedFiles(QTreeWidgetItem* item, 
                              std::vector<FileToWipe>& selected);
