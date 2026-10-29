@@ -131,6 +131,16 @@ QString mlTableSummary(const QJsonObject& record)
 {
     const QString raw = record.value(QStringLiteral("mlResults")).toString().trimmed();
     if (raw.isEmpty()) return QStringLiteral("ML analysis not available");
+
+    // Historical rows created by the prior unnormalized formula / synthetic recovery labels
+    // are preserved for audit, but must not be presented as valid current ML results.
+    const bool containsOldSimilarity = raw.contains(QStringLiteral("Similarity score:"), Qt::CaseInsensitive);
+    const bool containsNormalizedSimilarity = raw.contains(
+        QStringLiteral("normalized before/after feature comparison"), Qt::CaseInsensitive);
+    if (containsOldSimilarity && !containsNormalizedSimilarity) {
+        return QStringLiteral("Legacy result — previous score is not valid; use a new operation for updated analysis");
+    }
+
     const QStringList lines = raw.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
     QStringList clean;
     for (const QString& sourceLine : lines) {
@@ -601,12 +611,24 @@ void MainWindow::refreshCertificates()
 
         const QString pdfPath = QDir(certificateDirectory).filePath(certificateId + QStringLiteral(".pdf"));
         bool pdfExists = QFileInfo(pdfPath).exists() && QFileInfo(pdfPath).size() > 0;
-        if (!pdfExists)
-            pdfExists = writeCertificatePdf(pdfPath, record);
+        const int templateVersion = record.value(QStringLiteral("certificateTemplateVersion")).toInt();
+        bool refreshedPdf = false;
+        // Regenerate prior-template PDFs so legacy ML values are clearly labelled
+        // and the visible certificate uses the current report format.
+        if (!pdfExists || templateVersion < 2) {
+            refreshedPdf = writeCertificatePdf(pdfPath, record);
+            if (refreshedPdf)
+                pdfExists = true;
+            else if (!pdfExists)
+                pdfExists = QFileInfo(pdfPath).exists() && QFileInfo(pdfPath).size() > 0;
+        }
 
         const QString storedPath = record.value(QStringLiteral("certificatePath")).toString();
         const QString desiredPath = pdfExists ? pdfPath : QString();
-        if (storedPath != desiredPath || record.contains(QStringLiteral("certificateError"))) {
+        if (pdfExists && refreshedPdf)
+            record.insert(QStringLiteral("certificateTemplateVersion"), 2);
+        if (storedPath != desiredPath || record.contains(QStringLiteral("certificateError")) ||
+            (pdfExists && refreshedPdf && templateVersion < 2)) {
             record.insert(QStringLiteral("certificatePath"), desiredPath);
             if (pdfExists) record.remove(QStringLiteral("certificateError"));
             else record.insert(QStringLiteral("certificateError"), QStringLiteral("PDF certificate generation failed."));
@@ -688,6 +710,7 @@ void MainWindow::recordWipeActivity(const QString& fileName, const QString& file
     record.insert(QStringLiteral("errorMessage"), errorMessage);
     record.insert(QStringLiteral("certificateId"), certificateId);
     record.insert(QStringLiteral("certificatePath"), certificatePath);
+    record.insert(QStringLiteral("certificateTemplateVersion"), 2);
     record.insert(QStringLiteral("recordDigestSha256"), auditRecordDigest(record));
 
     const bool certificateSaved = writeCertificatePdf(certificatePath, record);
