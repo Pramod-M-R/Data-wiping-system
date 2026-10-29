@@ -533,6 +533,19 @@ void MainWindow::refreshCertificates()
         const QJsonObject r = records.at(i).toObject();
         const QString certPath = r.value(QStringLiteral("certificatePath")).toString();
         const QString error = r.value(QStringLiteral("errorMessage")).toString();
+
+        // Refresh earlier certificates with the current human-readable IST template.
+        if (!certPath.isEmpty() && QFileInfo::exists(certPath)) {
+            const QByteArray updatedHtml = certificateHtml(r).toUtf8();
+            QSaveFile updatedCertificate(certPath);
+            if (updatedCertificate.open(QIODevice::WriteOnly)) {
+                if (updatedCertificate.write(updatedHtml) == updatedHtml.size())
+                    updatedCertificate.commit();
+                else
+                    updatedCertificate.cancelWriting();
+            }
+        }
+
         const QStringList values = {
             displayTimestamp(r),
             r.value(QStringLiteral("user")).toString(),
