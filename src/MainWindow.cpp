@@ -1177,12 +1177,24 @@ void MainWindow::appendAssistantMessage(const QString& role, const QString& text
     const bool user = role == QStringLiteral("user");
     const QString title = user ? QStringLiteral("You") : QStringLiteral("DataGuard Assistant");
     const QString safe = text.toHtmlEscaped().replace(QStringLiteral("\n"), QStringLiteral("<br>"));
+
+    // Chat-style layout: assistant replies stay on the left, user queries on the right.
+    // Tables are used instead of float/flex CSS so Qt's QTextDocument renders alignment
+    // consistently on Windows and does not combine consecutive messages into one side.
+    const QString alignment = user ? QStringLiteral("right") : QStringLiteral("left");
+    const QString bubbleWidth = user ? QStringLiteral("72%") : QStringLiteral("82%");
+    const QString background = user ? QStringLiteral("#123f5e") : QStringLiteral("#172235");
+    const QString border = user ? QStringLiteral("#287da3") : QStringLiteral("#2c425e");
+    const QString titleColor = user ? QStringLiteral("#8fe4fb") : QStringLiteral("#d9e9ff");
     const QString html = QStringLiteral(
-        "<div style='margin:8px 0 14px 0;padding:10px 12px;background:%1;border-radius:9px;color:#eff6ff;'>"
-        "<div style='font-weight:700;color:%2;margin-bottom:5px;'>%3</div><div style='line-height:1.45;'>%4</div></div>")
-        .arg(user ? QStringLiteral("rgba(24,73,104,0.48)") : QStringLiteral("rgba(23,34,53,0.80)"),
-             user ? QStringLiteral("#78d7f3") : QStringLiteral("#d9e9ff"),
-             title.toHtmlEscaped(), safe);
+        "<table width='100%' cellspacing='0' cellpadding='0' style='margin-top:8px;margin-bottom:12px;'>"
+        "<tr><td align='%1'>"
+        "<table width='%2' cellspacing='0' cellpadding='0' style='background:%3;border:1px solid %4;border-radius:12px;'>"
+        "<tr><td style='padding:10px 13px;color:#eff6ff;'>"
+        "<div style='font-weight:700;color:%5;font-size:10pt;margin-bottom:5px;'>%6</div>"
+        "<div style='line-height:1.5;font-size:10pt;'>%7</div>"
+        "</td></tr></table></td></tr></table>")
+        .arg(alignment, bubbleWidth, background, border, titleColor, title.toHtmlEscaped(), safe);
     m_assistantTranscript->append(html);
     m_assistantTranscript->verticalScrollBar()->setValue(m_assistantTranscript->verticalScrollBar()->maximum());
 }
