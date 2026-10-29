@@ -18,6 +18,8 @@
 
 class QStackedWidget;
 class QToolButton;
+class QTableWidget;
+class QJsonObject;
 #include "FeatureExtractor.h"
 #include "FileScanner.h"
 
@@ -62,10 +64,20 @@ private:
     QWidget* buildDevicesPage();
     QWidget* buildScanResultsPage();
     QWidget* buildOperationsPage();
+    QWidget* buildActivityLogPage();
+    QWidget* buildCertificatesPage();
     QWidget* buildPlaceholderPage(const QString& headingText, const QString& message, const QString& glyph);
     QWidget* buildSettingsPage();
     void navigateTo(int pageIndex, const QString& title);
     void signOut();
+    void refreshActivityLog();
+    void refreshCertificates();
+    void recordWipeActivity(const QString& fileName, const QString& filePath,
+                            const QString& source, const QString& driveLetter,
+                            const QString& physicalDevicePath, const QString& deviceModel,
+                            const QString& method, int passes, bool success,
+                            const QString& verification, unsigned long long bytesWiped,
+                            const QString& mlResults, const QString& errorMessage);
 
     QString m_signedInUser;
     QLabel* m_pageTitle = nullptr;
@@ -78,6 +90,8 @@ private:
     QPushButton* m_dashboardOpenScanButton = nullptr;
     QPushButton* m_dashboardOpenOperationsButton = nullptr;
     QStackedWidget* m_pages = nullptr;
+    QTableWidget* m_activityTable = nullptr;
+    QTableWidget* m_certificatesTable = nullptr;
     QVector<QToolButton*> m_navigationButtons;
 
 std::map<std::string, FileEntry> deletedFileEntries;
