@@ -141,6 +141,10 @@ def _activity_record(source: Any) -> dict[str, Any]:
     return result
 
 
+def _settings(source: Any) -> dict[str, str]:
+    return _copy_text_fields(source, ("signed_in_user", "persistence", "application_name"))
+
+
 def _certificate(source: Any) -> dict[str, Any]:
     if not isinstance(source, dict):
         return {}
@@ -183,6 +187,9 @@ def build_context(raw: Any) -> dict[str, Any]:
     signed_in_user = _text(raw.get("signed_in_user"), 120)
     if signed_in_user:
         context["signed_in_user"] = signed_in_user
+    settings = _settings(raw.get("settings"))
+    if settings:
+        context["settings"] = settings
 
     selected = _selected_operation(raw.get("selected_operation"))
     if selected:
