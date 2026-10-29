@@ -983,14 +983,20 @@ void MainWindow::onWipeClicked() {
     if (row >= (int)drives.size()) return;
     auto &drive = drives[row];
 
-    auto auditOperation = [this, &drive](const QString& fileName, const QString& filePath,
-                                         const QString& source, const QString& methodName,
-                                         int passes, bool success, const QString& verification,
-                                         unsigned long long bytes, const QString& mlResults,
+    auto auditOperation = [this, &drive](const QString& fileName,
+                                         const QString& filePath,
+                                         const QString& source,
+                                         const QString& methodName,
+                                         int passes,
+                                         bool success,
+                                         const QString& verification,
+                                         unsigned long long bytes,
+                                         const QString& mlResults,
                                          const QString& error) {
         recordWipeActivity(fileName, filePath, source,
             QStringLiteral("%1:").arg(QChar(drive.letter)),
-            QString::fromStdString(drive.path), QString::fromStdString(drive.model),
+            QString::fromStdString(drive.path),
+            QString::fromStdString(drive.model),
             methodName, passes, success, verification, bytes, mlResults, error);
     };
 
@@ -1037,9 +1043,9 @@ void MainWindow::onWipeClicked() {
             QStringLiteral("Drive %1: (entire drive)").arg(QChar(drive.letter)),
             QStringLiteral("Entire drive"), wipeMethodCombo->currentText(),
             passesForMethod(methodIndex), result.success,
-            QStringLiteral("Not reported by the current full-drive wipe path"),
+            QStringLiteral("Separate verification is not reported by the original full-drive path"),
             result.bytesWiped,
-            QStringLiteral("ML analysis is not run for full-drive wipes in the current pipeline."),
+            QStringLiteral("ML feature comparison is not run by the original full-drive path."),
             QString::fromStdString(result.errorMessage));
         refreshActivityLog();
         refreshCertificates();
@@ -1092,7 +1098,7 @@ void MainWindow::onWipeClicked() {
 
         for (size_t i = 0; i < selectedFiles.size(); i++) {
             auto& file = selectedFiles[i];
-
+            
             progressLabel->setText(
                 QString("Wiping file %1 of %2: %3")
                     .arg(i + 1).arg(selectedFiles.size())
@@ -1111,13 +1117,12 @@ void MainWindow::onWipeClicked() {
         maxReadBytes
     );
 
-    if (!beforeRead.success)
-        const QString auditPath = auditPathForFile(file, drive.letter);
-        auditOperation(QString::fromStdString(file.name), auditPath,
-            QStringLiteral("Deleted Files section / physical extents"),
-            wipeMethodCombo->currentText(), passesForMethod(methodIndex), false,
+    if (!beforeRead.success) {
+        auditOperation(QString::fromStdString(file.name), auditPathForFile(file, drive.letter),
+            QStringLiteral("Deleted Files"), wipeMethodCombo->currentText(),
+            passesForMethod(methodIndex), false,
             QStringLiteral("Not performed — pre-wipe fingerprint read failed"), 0,
-            QStringLiteral("ML analysis not generated because the original fingerprint could not be read."),
+            QStringLiteral("ML analysis not generated because the original data could not be read."),
             QString::fromStdString(beforeRead.errorMessage));
         QMessageBox::warning(
             this,
@@ -1141,13 +1146,12 @@ void MainWindow::onWipeClicked() {
     QApplication::processEvents();
 
     if (file.fileEntry.extents.empty()) {
-        const QString auditPath = auditPathForFile(file, drive.letter);
-        auditOperation(QString::fromStdString(file.name), auditPath,
-            QStringLiteral("Deleted Files section / physical extents"),
-            wipeMethodCombo->currentText(), passesForMethod(methodIndex), false,
-            QStringLiteral("Not performed — no physical extents available"), 0,
-            QStringLiteral("ML analysis not generated because no wipeable physical extents were found."),
-            QStringLiteral("No physical extents were found for this deleted-file entry."));
+        auditOperation(QString::fromStdString(file.name), auditPathForFile(file, drive.letter),
+            QStringLiteral("Deleted Files"), wipeMethodCombo->currentText(),
+            passesForMethod(methodIndex), false,
+            QStringLiteral("Not performed — no physical extents were found"), 0,
+            QStringLiteral("ML analysis not generated because no physical extent data was available."),
+            QStringLiteral("The scanner did not provide wipeable physical extents for this entry."));
         QMessageBox::warning(
             this,
             "Wipe Failed",
@@ -1175,13 +1179,11 @@ void MainWindow::onWipeClicked() {
     );
 
     if (!result.success) {
-        const QString auditPath = auditPathForFile(file, drive.letter);
-        auditOperation(QString::fromStdString(file.name), auditPath,
-            QStringLiteral("Deleted Files section / physical extents"),
-            wipeMethodCombo->currentText(), passesForMethod(methodIndex), false,
-            QStringLiteral("Not verified — the wipe operation failed"),
-            result.bytesWiped,
-            QStringLiteral("ML analysis not generated because the deleted-file wipe did not complete."),
+        auditOperation(QString::fromStdString(file.name), auditPathForFile(file, drive.letter),
+            QStringLiteral("Deleted Files"), wipeMethodCombo->currentText(),
+            passesForMethod(methodIndex), false,
+            QStringLiteral("Wipe failed"), result.bytesWiped,
+            QStringLiteral("ML analysis not generated because the wipe did not complete."),
             QString::fromStdString(result.errorMessage));
         QMessageBox::warning(
             this,
@@ -1226,13 +1228,12 @@ void MainWindow::onWipeClicked() {
                 ))
         );
 
-        const QString auditPath = auditPathForFile(file, drive.letter);
-        auditOperation(QString::fromStdString(file.name), auditPath,
-            QStringLiteral("Deleted Files section / physical extents"),
-            wipeMethodCombo->currentText(), passesForMethod(methodIndex), false,
-            QStringLiteral("FAILED — final-pass extent verification did not pass"),
+        auditOperation(QString::fromStdString(file.name), auditPathForFile(file, drive.letter),
+            QStringLiteral("Deleted Files"), wipeMethodCombo->currentText(),
+            passesForMethod(methodIndex), false,
+            QStringLiteral("Verification failed — final-pass data did not match"),
             result.bytesWiped,
-            QStringLiteral("ML analysis not generated because verification failed."),
+            QStringLiteral("ML analysis not generated because post-wipe verification failed."),
             QString::fromStdString(verificationResult.errorMessage));
         continue;
     }
@@ -1442,43 +1443,37 @@ else if (riskLevel == 2) {
         "AFTER Fingerprint Failed",
         QString("Could not read wiped data for:\n%1\n\nReason: %2")
             .arg(QString::fromStdString(file.name))
-            .arg(QString::fromStdString(afterRead.errorMessage.empty()
-                ? std::string("The post-wipe byte buffer was empty.") : afterRead.errorMessage))
+            .arg(QString::fromStdString(afterRead.errorMessage))
     );
 }
 
-const QString deletedAuditPath = auditPathForFile(file, drive.letter);
-QString deletedMlResults;
-if (!afterRead.success) {
-    deletedMlResults = QStringLiteral("ML analysis unavailable because the post-wipe data read failed.");
-} else if (similarityScoreFile == file.name) {
-    QStringList details;
-    details << QStringLiteral("Similarity score: %1%")
-        .arg(similarityScore * 100.0, 0, 'f', 2);
-    if (recoverabilityScoreGenerated) {
-        details << QStringLiteral("Recoverability score: %1%")
-            .arg(recoverabilityScore * 100.0, 0, 'f', 2);
-        details << QStringLiteral("Recoverability risk: %1")
-            .arg(riskLevel == 0 ? QStringLiteral("LOW") :
-                 riskLevel == 1 ? QStringLiteral("MEDIUM") : QStringLiteral("HIGH"));
-        if (!wipeRecommendation.empty())
-            details << QStringLiteral("Recommendation: %1")
-                .arg(QString::fromStdString(wipeRecommendation));
+    QStringList mlDetails;
+    if (!afterRead.success) {
+        mlDetails << QStringLiteral("ML analysis unavailable because the post-wipe data read failed.");
+    } else if (similarityScoreFile == file.name) {
+        mlDetails << QStringLiteral("Similarity score: %1%")
+            .arg(similarityScore * 100.0, 0, 'f', 2);
+        if (recoverabilityScoreGenerated) {
+            mlDetails << QStringLiteral("Recoverability score: %1%")
+                .arg(recoverabilityScore * 100.0, 0, 'f', 2);
+            mlDetails << QStringLiteral("Recoverability risk: %1")
+                .arg(riskLevel == 0 ? QStringLiteral("LOW") :
+                     riskLevel == 1 ? QStringLiteral("MEDIUM") : QStringLiteral("HIGH"));
+            if (!wipeRecommendation.empty())
+                mlDetails << QStringLiteral("Recommendation: %1")
+                    .arg(QString::fromStdString(wipeRecommendation));
+        } else {
+            mlDetails << QStringLiteral("Recoverability score: Not generated");
+        }
     } else {
-        details << QStringLiteral("Recoverability score: Not generated");
+        mlDetails << QStringLiteral("ML analysis was not generated for this file.");
     }
-    deletedMlResults = details.join(QStringLiteral("\n"));
-} else {
-    deletedMlResults = QStringLiteral("ML analysis was not generated for this file.");
-}
-const QString mlError = afterRead.success ? QString() :
-    QStringLiteral("Post-wipe data read failed; ML analysis could not be completed: %1")
-        .arg(QString::fromStdString(afterRead.errorMessage));
-auditOperation(QString::fromStdString(file.name), deletedAuditPath,
-    QStringLiteral("Deleted Files"), wipeMethodCombo->currentText(),
-    passesForMethod(methodIndex), true,
-    QStringLiteral("PASSED — physical extents matched the expected final-pass data"),
-    result.bytesWiped, deletedMlResults, mlError);
+    auditOperation(QString::fromStdString(file.name), auditPathForFile(file, drive.letter),
+        QStringLiteral("Deleted Files"), wipeMethodCombo->currentText(),
+        passesForMethod(methodIndex), true,
+        QStringLiteral("PASSED — physical extents matched the expected final-pass data"),
+        result.bytesWiped, mlDetails.join(QStringLiteral("\n")), QString());
+
 } else {
     std::string filePath =
         std::string(1, currentDriveLetter) + ":\\" + file.name;
@@ -1488,11 +1483,11 @@ auditOperation(QString::fromStdString(file.name), deletedAuditPath,
     auto result = engine.wipeFile(qFilePath, method);
 
     auditOperation(QString::fromStdString(file.name), auditPathForFile(file, drive.letter),
-        QStringLiteral("Existing files"),
-        wipeMethodCombo->currentText(), passesForMethod(methodIndex), result.success,
-        QStringLiteral("Not reported by the current standard-file wipe path"),
+        QStringLiteral("Existing Files"), wipeMethodCombo->currentText(),
+        passesForMethod(methodIndex), result.success,
+        QStringLiteral("Separate read-back verification is not reported by the original standard-file path"),
         result.bytesWiped,
-        QStringLiteral("ML analysis is not run for standard existing-file wipes in the current pipeline."),
+        QStringLiteral("Before/after deleted-extent ML comparison is not run for standard existing-file wipes."),
         QString::fromStdString(result.errorMessage));
 
     if (result.success) {
