@@ -4,17 +4,32 @@ from __future__ import annotations
 import re
 
 _PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    # Resolve certificate-specific questions before the broader "prove/verification" intent.
+    ("certificate", (
+        r"\b(certificate|pdf|proof of wipe|wipe proof|certificate id)\b",
+    )),
+    # Route explicit whole-drive goals to guidance rather than the generic destructive-request response.
+    ("operation_selection", (
+        r"\b(which operation|what should i choose|which workflow|want to erase everything|wipe everything|"
+        r"want to wipe (the )?(usb|drive|disk)|wipe (the )?(entire|whole|full) (drive|usb|disk)|"
+        r"erase (the )?(entire|whole|full) (drive|usb|disk)|erase all data)\b",
+    )),
     ("destructive_request", (
         r"\b(wipe|erase|destroy)\s+(it|this|that|the file|the drive|everything|all data)\b",
         r"\b(start|run|execute|perform|initiate)\s+(the\s+)?(wipe|erasure|recovery)\b",
         r"\bdelete\s+(it|this file|that file)\b",
     )),
+    ("recovery_drive_guidance", (
+        r"\b(recover|restore|scan for|find)\b.{0,40}\b(drive|usb|disk|volume)\b",
+        r"\b(drive recovery|recover the entire drive|recover the usb)\b",
+    )),
+    ("recovery_file_guidance", (
+        r"\b(recover|restore|undelete|bring back)\b.{0,40}\b(file|folder|document|photo|pdf)\b",
+        r"\b(file recovery|recover a file)\b",
+    )),
     ("verification", (
         r"\b(verified|verification|prove|permanently gone|irrecoverable|irrecoverability)\b",
         r"\b(is my data gone|is it permanently deleted|does the certificate prove)\b",
-    )),
-    ("certificate", (
-        r"\b(certificate|pdf|proof of wipe|wipe proof|certificate id)\b",
     )),
     ("error", (
         r"\b(error|failed|failure|not working|could not|cannot|can't|why did .* fail)\b",
@@ -35,9 +50,6 @@ _PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("recovery_guidance", (
         r"\b(recover|recovery|restore|undelete|bring back)\b",
     )),
-    ("operation_selection", (
-        r"\b(which operation|what should i choose|which workflow|want to erase everything|wipe everything)\b",
-    )),
     ("wipe_guidance", (
         r"\b(wipe|erasure|single pass|three pass|three-pass|7-pass|seven pass|dod)\b",
     )),
@@ -51,6 +63,7 @@ _PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
         r"\b(help|what can you do|how do i use|how to use this app)\b",
     )),
 )
+
 
 
 def classify_intent(question: str) -> str:
