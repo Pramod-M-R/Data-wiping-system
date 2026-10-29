@@ -628,8 +628,7 @@ differences.uniqueByteRatio =
     std::abs(before.uniqueByteRatio - afterFeatures.uniqueByteRatio);
 
 differences.dominantBytePercentage =
-    std::abs(before.dominantBytePercentage -
-             afterFeatures.dominantBytePercentage);
+    std::abs(before.dominantBytePercentage - afterFeatures.dominantBytePercentage);
 
 differences.byteRange =
     std::abs(before.byteRange - afterFeatures.byteRange);
