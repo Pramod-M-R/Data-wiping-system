@@ -10,6 +10,9 @@ set(CMAKE_PREFIX_PATH "C:/Qt/6.11.2/mingw_64")
 
 find_package(Qt6 REQUIRED COMPONENTS Widgets Sql)
 
+# Keep the local, rule-based assistant beside the executable in build/assistant.
+file(COPY "${CMAKE_SOURCE_DIR}/assistant" DESTINATION "${CMAKE_BINARY_DIR}")
+
 add_executable(WipeEngine WIN32
     src/main.cpp
     src/MainWindow.cpp
