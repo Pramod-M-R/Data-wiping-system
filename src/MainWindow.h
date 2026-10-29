@@ -1,5 +1,7 @@
 #pragma once
 #include <QMainWindow>
+#include <QString>
+#include <QVector>
 #include <QListWidget>
 #include <QPushButton>
 #include <QLabel>
@@ -13,6 +15,9 @@
 #include <map>
 #include <vector>
 #include <string>
+
+class QStackedWidget;
+class QToolButton;
 #include "FeatureExtractor.h"
 #include "FileScanner.h"
 
@@ -40,6 +45,10 @@ class MainWindow : public QMainWindow {
     Q_OBJECT
 public:
     MainWindow(QWidget *parent = nullptr);
+    void setSignedInUser(const QString& username);
+
+signals:
+    void signOutRequested();
 
 private slots:
     void onRefreshClicked();
@@ -49,6 +58,28 @@ private slots:
     void onFileChecked(QTreeWidgetItem* item, int column);
 
 private:
+    QWidget* buildDashboardPage();
+    QWidget* buildDevicesPage();
+    QWidget* buildScanResultsPage();
+    QWidget* buildOperationsPage();
+    QWidget* buildPlaceholderPage(const QString& headingText, const QString& message, const QString& glyph);
+    QWidget* buildSettingsPage();
+    void navigateTo(int pageIndex, const QString& title);
+    void signOut();
+
+    QString m_signedInUser;
+    QLabel* m_pageTitle = nullptr;
+    QLabel* m_accountLabel = nullptr;
+    QLabel* m_settingsUsername = nullptr;
+    QLabel* m_dashboardDeviceCount = nullptr;
+    QLabel* m_dashboardEntryCount = nullptr;
+    QLabel* m_dashboardWipeMethod = nullptr;
+    QPushButton* m_dashboardRefreshButton = nullptr;
+    QPushButton* m_dashboardOpenScanButton = nullptr;
+    QPushButton* m_dashboardOpenOperationsButton = nullptr;
+    QStackedWidget* m_pages = nullptr;
+    QVector<QToolButton*> m_navigationButtons;
+
 std::map<std::string, FileEntry> deletedFileEntries;
 std::map<std::string, FeatureVector> beforeFingerprints;
 std::map<std::string, FeatureVector> afterFingerprints;
