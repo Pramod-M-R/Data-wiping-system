@@ -8,7 +8,6 @@ ALLOWED_SCREENS = {
     "activity_log", "certificates", "assistant", "settings",
 }
 MAX_TEXT = 320
-MAX_QUESTION_CONTEXT_TEXT = 1200
 
 
 def _text(value: Any, limit: int = MAX_TEXT) -> str:
@@ -37,7 +36,7 @@ def _copy_text_fields(source: Any, fields: tuple[str, ...]) -> dict[str, str]:
 def _selected_operation(source: Any) -> dict[str, Any]:
     if not isinstance(source, dict):
         return {}
-    allowed = {"workflow", "wipe_method", "selected_file_count"}
+    allowed = {"workflow", "wipe_method", "selected_file_count", "drive_name"}
     result: dict[str, Any] = {}
     for key in allowed:
         value = source.get(key)
@@ -53,7 +52,7 @@ def _selected_operation(source: Any) -> dict[str, Any]:
     files = source.get("selected_files")
     if isinstance(files, list):
         cleaned_files = []
-        for item in files[:10]:
+        for item in files[:20]:
             if not isinstance(item, dict):
                 continue
             entry: dict[str, Any] = {}
@@ -78,8 +77,9 @@ def _device(source: Any) -> dict[str, Any]:
     )
     if not isinstance(source, dict):
         return result
-    if isinstance(source.get("connected"), bool):
-        result["connected"] = source["connected"]
+    for key in ("connected", "selected"):
+        if isinstance(source.get(key), bool):
+            result[key] = source[key]
     capacity = _count(source.get("capacity_bytes"))
     if capacity is not None:
         result["capacity_bytes"] = capacity
@@ -107,19 +107,37 @@ def _scan_summary(source: Any) -> dict[str, Any]:
     return result
 
 
-def _operation(source: Any) -> dict[str, Any]:
+def _scan_entry(source: Any) -> dict[str, Any]:
+    if not isinstance(source, dict):
+        return {}
+    result = _copy_text_fields(
+        source, ("file_name", "location", "status", "modified", "size_display")
+    )
+    size = _count(source.get("size_bytes"))
+    if size is not None:
+        result["size_bytes"] = size
+    if isinstance(source.get("is_deleted"), bool):
+        result["is_deleted"] = source["is_deleted"]
+    return result
+
+
+def _activity_record(source: Any) -> dict[str, Any]:
     if not isinstance(source, dict):
         return {}
     result = _copy_text_fields(
         source,
         (
-            "timestamp", "file_name", "source", "method", "status",
-            "verification", "error_message", "ml_summary", "certificate_id",
+            "timestamp", "user", "file_name", "location", "method", "status",
+            "outcome", "verification", "ml_summary", "error_message",
+            "certificate_id",
         ),
     )
-    bytes_wiped = _count(source.get("bytes_wiped"))
-    if bytes_wiped is not None:
-        result["bytes_wiped"] = bytes_wiped
+    passes = _count(source.get("passes"))
+    if passes is not None:
+        result["passes"] = passes
+    for key in ("certificate_available",):
+        if isinstance(source.get(key), bool):
+            result[key] = source[key]
     return result
 
 
@@ -130,12 +148,25 @@ def _certificate(source: Any) -> dict[str, Any]:
         source,
         (
             "certificate_id", "timestamp", "user", "file_name", "location",
-            "method", "status", "verification", "ml_summary",
+            "method", "status", "outcome", "verification", "ml_summary",
         ),
     )
     passes = _count(source.get("passes"))
     if passes is not None:
         result["passes"] = passes
+    if isinstance(source.get("pdf_ready"), bool):
+        result["pdf_ready"] = source["pdf_ready"]
+    return result
+
+
+def _bounded_objects(source: Any, limit: int, builder) -> list[dict[str, Any]]:
+    if not isinstance(source, list):
+        return []
+    result = []
+    for item in source[:limit]:
+        clean = builder(item)
+        if clean:
+            result.append(clean)
     return result
 
 
@@ -149,16 +180,39 @@ def build_context(raw: Any) -> dict[str, Any]:
         screen = "unknown"
 
     context: dict[str, Any] = {"screen": screen}
+    signed_in_user = _text(raw.get("signed_in_user"), 120)
+    if signed_in_user:
+        context["signed_in_user"] = signed_in_user
+
     selected = _selected_operation(raw.get("selected_operation"))
     if selected:
         context["selected_operation"] = selected
     device = _device(raw.get("device"))
     if device:
         context["device"] = device
+
+    devices = _bounded_objects(raw.get("devices"), 15, _device)
+    if devices:
+        context["devices"] = devices
+
     scan = _scan_summary(raw.get("scan_summary"))
     if scan:
         context["scan_summary"] = scan
-    operation = _operation(raw.get("last_recorded_operation"))
+    scan_entries = _bounded_objects(raw.get("scan_entries"), 100, _scan_entry)
+    if scan_entries:
+        context["scan_entries"] = scan_entries
+
+    # Recent records are newest-first and intentionally bounded. The service can
+    # answer history questions without receiving the complete permanent audit log.
+    activity_records = _bounded_objects(raw.get("activity_records"), 30, _activity_record)
+    if activity_records:
+        context["activity_records"] = activity_records
+
+    certificate_records = _bounded_objects(raw.get("certificate_records"), 25, _certificate)
+    if certificate_records:
+        context["certificate_records"] = certificate_records
+
+    operation = _activity_record(raw.get("last_recorded_operation"))
     if operation:
         context["last_recorded_operation"] = operation
     certificate = _certificate(raw.get("certificate"))
