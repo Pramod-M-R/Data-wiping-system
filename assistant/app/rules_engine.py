@@ -110,6 +110,7 @@ def _format_history_record(record: dict[str, Any]) -> str:
         ("user", "Signed-in user"),
         ("verification", "Verification"),
         ("certificate_id", "Certificate ID"),
+        ("error_message", "Recorded error"),
     )
     lines = []
     for key, label in fields:
@@ -428,7 +429,7 @@ def answer_question(
                     line += " — PDF ready" if pdf_ready else " — PDF unavailable or not verified"
                     lines.append(line)
                 return _result(
-                    "Recent certificate records supplied by DataGuard, newest first:\\n" + "\\n".join(f"• {line}" for line in lines),
+                    "Recent certificate records supplied by DataGuard, newest first:\n" + "\n".join(f"• {line}" for line in lines),
                     "certificate_list",
                     caveats=["Select a row in Certificates to ask for that certificate's full recorded details."],
                     navigation=[_nav("Open Certificates", "certificates")],
