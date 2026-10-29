@@ -22,6 +22,22 @@
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <QWidget>
+#include <QTableWidget>
+#include <QTableWidgetItem>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QStandardPaths>
+#include <QFile>
+#include <QSaveFile>
+#include <QDesktopServices>
+#include <QUrl>
+#include <QUuid>
+#include <QCryptographicHash>
+#include <QFileInfo>
+#include <QDateTime>
+#include <QColor>
+#include <QDir>
 #include <map>
 #include <cmath>
 #include "RandomForest.h"
@@ -37,6 +53,131 @@ QLabel* bodyText(const QString& text, QWidget* parent=nullptr) { auto* l=new QLa
 QFrame* makeCard(QWidget* parent=nullptr) { auto* f=new QFrame(parent); f->setObjectName(QStringLiteral("contentCard")); f->setStyleSheet(cardStyle); return f; }
 QWidget* scrollPage(QWidget* content) { auto* s=new QScrollArea; s->setWidgetResizable(true); s->setFrameShape(QFrame::NoFrame); s->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded); s->setStyleSheet(QStringLiteral("QScrollArea { background:transparent; } QScrollArea > QWidget > QWidget { background:transparent; } QScrollBar:vertical { background:rgba(4,16,42,130); width:9px; margin:2px; } QScrollBar::handle:vertical { background:#477b9e; border-radius:4px; min-height:24px; }")); s->setWidget(content); return s; }
 void stylePrimaryButton(QPushButton* b) { b->setCursor(Qt::PointingHandCursor); b->setMinimumHeight(40); b->setStyleSheet(QStringLiteral("QPushButton { color:white; background:#1677c8; border:0; border-radius:8px; padding:8px 14px; font-weight:700; } QPushButton:hover { background:#2395dc; } QPushButton:disabled { background:#465b70; color:#aab8c5; } QPushButton:focus { border:2px solid #72dafa; }")); }
+
+QString auditRootPath()
+{
+    QString root = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    if (root.isEmpty())
+        root = QDir::home().filePath(QStringLiteral(".dataguard"));
+    QDir().mkpath(root);
+    QDir().mkpath(QDir(root).filePath(QStringLiteral("Certificates")));
+    return root;
+}
+QJsonArray readAuditRecords()
+{
+    QFile file(QDir(auditRootPath()).filePath(QStringLiteral("activity_log.json")));
+    if (!file.open(QIODevice::ReadOnly)) return QJsonArray();
+    const QJsonDocument document = QJsonDocument::fromJson(file.readAll());
+    return document.isArray() ? document.array() : QJsonArray();
+}
+bool writeAuditRecords(const QJsonArray& records)
+{
+    const QString path = QDir(auditRootPath()).filePath(QStringLiteral("activity_log.json"));
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly)) return false;
+    const QByteArray bytes = QJsonDocument(records).toJson(QJsonDocument::Indented);
+    if (file.write(bytes) != bytes.size()) { file.cancelWriting(); return false; }
+    return file.commit();
+}
+QString auditRecordDigest(QJsonObject record)
+{
+    record.remove(QStringLiteral("recordDigestSha256"));
+    const QByteArray bytes = QJsonDocument(record).toJson(QJsonDocument::Compact);
+    return QString::fromLatin1(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex());
+}
+QString certificateHtml(const QJsonObject& record)
+{
+    auto field = [&record](const QString& label, const QString& key) {
+        return QStringLiteral("<tr><th>%1</th><td>%2</td></tr>")
+            .arg(label.toHtmlEscaped(), record.value(key).toString().toHtmlEscaped());
+    };
+    const QString ml = record.value(QStringLiteral("mlResults")).toString()
+        .toHtmlEscaped().replace(QStringLiteral("\n"), QStringLiteral("<br>"));
+    const QString error = record.value(QStringLiteral("errorMessage")).toString()
+        .toHtmlEscaped().replace(QStringLiteral("\n"), QStringLiteral("<br>"));
+    QString html = QStringLiteral(R"HTML(<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DataGuard Secure Wipe Certificate</title>
+<style>
+*{box-sizing:border-box}body{font-family:"Segoe UI",Arial,sans-serif;background:#eef2f7;color:#182536;margin:0;padding:32px}
+main{max-width:1000px;margin:0 auto;background:#fff;border-top:7px solid #1677c8;padding:34px 42px;box-shadow:0 8px 28px #18253620}
+h1{margin:0;color:#132c47;font-size:28px}.subtitle{color:#53677e;margin:8px 0 22px}
+.badge{display:inline-block;border-radius:5px;padding:7px 12px;font-weight:800;background:#e8f5eb;color:#176c3a}
+.badge.failed{background:#fde9e9;color:#a11d2b}.id{background:#f1f5f9;border:1px solid #d8e0ea;padding:12px;margin:18px 0;font-family:Consolas,monospace;overflow-wrap:anywhere}
+h2{font-size:15px;text-transform:uppercase;letter-spacing:.7px;color:#1b5b8f;margin-top:28px;border-bottom:2px solid #d9e7f3;padding-bottom:8px}
+table{width:100%;border-collapse:collapse;table-layout:fixed}th,td{padding:11px 12px;border-bottom:1px solid #e2e8f0;text-align:left;vertical-align:top;overflow-wrap:anywhere}
+th{width:29%;background:#f5f8fb;color:#32485e}td{color:#182536;white-space:normal}
+.notes{border-left:4px solid #1677c8;background:#f3f8fc;padding:14px;line-height:1.6;overflow-wrap:anywhere}
+.hash{font-family:Consolas,monospace;font-size:12px;word-break:break-all}
+footer{margin-top:30px;border-top:1px solid #dae2ea;padding-top:18px;color:#596a7c;font-size:12px;line-height:1.55}
+@media print{body{padding:0;background:#fff}main{box-shadow:none;max-width:none;border:0;padding:16mm}}
+</style></head><body><main>
+<h1>DataGuard — Secure Wipe Certificate</h1>
+<div class="subtitle">Application-generated operation record · Secure. Recover. Verify.</div>
+)HTML");
+    const QString status = record.value(QStringLiteral("status")).toString();
+    html += QStringLiteral("<p><span class=\"badge%1\">%2</span></p>")
+        .arg(status == QStringLiteral("SUCCESS") ? QString() : QStringLiteral(" failed"),
+             status.toHtmlEscaped());
+    html += QStringLiteral("<div class=\"id\"><strong>Certificate ID:</strong> %1</div>")
+        .arg(record.value(QStringLiteral("certificateId")).toString().toHtmlEscaped());
+    html += QStringLiteral("<h2>Operator and timestamp</h2><table>");
+    html += field(QStringLiteral("Signed-in user"), QStringLiteral("user"));
+    html += field(QStringLiteral("Full timestamp (local time with offset)"), QStringLiteral("timestamp"));
+    html += QStringLiteral("</table><h2>Target and location</h2><table>");
+    html += field(QStringLiteral("File or drive"), QStringLiteral("fileName"));
+    html += field(QStringLiteral("File path / location"), QStringLiteral("filePath"));
+    html += field(QStringLiteral("Source section"), QStringLiteral("source"));
+    html += field(QStringLiteral("Drive"), QStringLiteral("driveLetter"));
+    html += field(QStringLiteral("Physical device path"), QStringLiteral("physicalDevicePath"));
+    html += field(QStringLiteral("Device model"), QStringLiteral("deviceModel"));
+    html += QStringLiteral("</table><h2>Wipe operation</h2><table>");
+    html += field(QStringLiteral("Method"), QStringLiteral("method"));
+    html += field(QStringLiteral("Passes"), QStringLiteral("passes"));
+    html += field(QStringLiteral("Bytes reported wiped"), QStringLiteral("bytesWiped"));
+    html += field(QStringLiteral("Outcome"), QStringLiteral("status"));
+    html += field(QStringLiteral("Verification"), QStringLiteral("verification"));
+    html += QStringLiteral("</table><h2>Post-wipe ML analysis</h2><div class=\"notes\">%1</div>")
+        .arg(ml.isEmpty() ? QStringLiteral("No ML result was generated for this operation.").toHtmlEscaped() : ml);
+    html += QStringLiteral("<h2>Failure / notes</h2><div class=\"notes\">%1</div>")
+        .arg(error.isEmpty() ? QStringLiteral("No error was reported by the wipe operation.") : error);
+    html += QStringLiteral("<h2>Record integrity</h2><div class=\"notes\">SHA-256 activity-record digest:<br><span class=\"hash\">%1</span></div>")
+        .arg(record.value(QStringLiteral("recordDigestSha256")).toString().toHtmlEscaped());
+    html += QStringLiteral(R"HTML(<footer>
+This certificate records information reported by the local DataGuard application. The record digest can help detect accidental changes, but it is not a digital signature and does not independently attest to the operator, device, or physical erasure. Retain the activity log and certificate together for audit review.
+</footer></main></body></html>)HTML");
+    return html;
+}
+void styleAuditTable(QTableWidget* table)
+{
+    table->setAlternatingRowColors(true);
+    table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    table->setSelectionBehavior(QAbstractItemView::SelectRows);
+    table->setSelectionMode(QAbstractItemView::SingleSelection);
+    table->setWordWrap(true);
+    table->verticalHeader()->setVisible(false);
+    table->setShowGrid(true);
+    table->setStyleSheet(QStringLiteral(
+        "QTableWidget { color:#f4f8ff; background:rgba(2,11,29,235); alternate-background-color:rgba(14,30,49,235); gridline-color:rgba(122,177,211,75); border:1px solid rgba(122,177,211,90); border-radius:8px; selection-background-color:#155f95; selection-color:#ffffff; font-size:12px; } "
+        "QTableWidget::item { color:#f4f8ff; padding:7px; } "
+        "QHeaderView::section { color:#ffffff; background:#192d45; border:0; border-right:1px solid rgba(122,177,211,70); border-bottom:1px solid rgba(122,177,211,85); padding:9px 7px; font-weight:700; } "
+        "QTableCornerButton::section { background:#192d45; border:0; }"));
+}
+QString auditPathForFile(const FileToWipe& file, char driveLetter)
+{
+    const QString name = QString::fromStdString(file.name);
+    if (file.isDeleted) {
+        if (!file.fileEntry.fullPath.empty()) return QString::fromStdString(file.fileEntry.fullPath);
+        return QStringLiteral("Deleted Files section on drive %1: / %2 (physical extents)")
+            .arg(QChar(driveLetter)).arg(name);
+    }
+    return QStringLiteral("%1:\\%2").arg(QChar(driveLetter)).arg(name);
+}
+int passesForMethod(int methodIndex)
+{
+    return methodIndex == 0 ? 1 : (methodIndex == 1 ? 3 : 7);
+}
+
 }
 
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
@@ -65,8 +206,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
     auto* logout=new QPushButton(QStringLiteral("Sign Out"),header); logout->setCursor(Qt::PointingHandCursor); logout->setStyleSheet(QStringLiteral("QPushButton { color:#eaf5ff; background:rgba(44,73,105,170); border:1px solid rgba(148,186,216,90); border-radius:8px; padding:8px 13px; } QPushButton:hover { background:rgba(64,101,139,210); }")); connect(logout,&QPushButton::clicked,this,&MainWindow::signOut); hl->addWidget(logout); rightLayout->addWidget(header);
     m_pages=new QStackedWidget(right); m_pages->setStyleSheet(QStringLiteral("QStackedWidget { background:transparent; }"));
     m_pages->addWidget(buildDashboardPage()); m_pages->addWidget(buildDevicesPage()); m_pages->addWidget(buildScanResultsPage()); m_pages->addWidget(buildOperationsPage());
-    m_pages->addWidget(buildPlaceholderPage(QStringLiteral("Activity Log"),QStringLiteral("Activity records are not yet presented in this view."),QStringLiteral("◷")));
-    m_pages->addWidget(buildPlaceholderPage(QStringLiteral("Certificates"),QStringLiteral("Certificate generation code is preserved; certificate browsing is not connected to this page yet."),QStringLiteral("▤")));
+    m_pages->addWidget(buildActivityLogPage());
+    m_pages->addWidget(buildCertificatesPage());
     m_pages->addWidget(buildPlaceholderPage(QStringLiteral("DataGuard Assistant"),QStringLiteral("The assistant is not connected to an active backend in this build."),QStringLiteral("✦")));
     m_pages->addWidget(buildSettingsPage()); rightLayout->addWidget(m_pages,1); shell->addWidget(right,1); setCentralWidget(background);
 
@@ -86,6 +227,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
     connect(m_dashboardOpenScanButton,&QPushButton::clicked,this,[this](){m_navigationButtons[2]->setChecked(true);navigateTo(2,QStringLiteral("Scan Results"));});
     connect(m_dashboardOpenOperationsButton,&QPushButton::clicked,this,[this](){m_navigationButtons[3]->setChecked(true);navigateTo(3,QStringLiteral("Operations"));});
     refreshSummary(); m_navigationButtons[0]->setChecked(true); setSignedInUser(QString());
+    refreshActivityLog(); refreshCertificates();
 }
 void MainWindow::setSignedInUser(const QString& username)
 {
@@ -139,6 +281,229 @@ QWidget* MainWindow::buildOperationsPage()
     wipeButton=new QPushButton(QStringLiteral("START WIPE"),card);stylePrimaryButton(wipeButton);wipeButton->setMinimumHeight(48);wipeButton->setStyleSheet(QStringLiteral("QPushButton { color:white; background:#b83245; border:0; border-radius:9px; padding:12px 18px; font-size:14px; font-weight:800; } QPushButton:hover { background:#d64255; } QPushButton:disabled { background:#465b70; color:#aab8c5; }"));wipeButton->setEnabled(false);wl->addWidget(wipeButton);
     progressBar=new QProgressBar(card);progressBar->setRange(0,100);progressBar->setValue(0);progressBar->setStyleSheet(QStringLiteral("QProgressBar { color:#eef6ff; background:rgba(2,11,29,180); border:1px solid rgba(122,177,211,65); border-radius:7px; text-align:center; min-height:18px; } QProgressBar::chunk { background:#20a3c5; border-radius:6px; }"));wl->addWidget(progressBar);progressLabel=bodyText(QStringLiteral("Select a device and press START WIPE."),card);progressLabel->setAlignment(Qt::AlignCenter);wl->addWidget(progressLabel);l->addWidget(card);l->addStretch();return scrollPage(c);
 }
+
+QWidget* MainWindow::buildActivityLogPage()
+{
+    auto* content = new QWidget;
+    auto* layout = new QVBoxLayout(content);
+    layout->setContentsMargins(4,4,8,8);
+    layout->setSpacing(12);
+    auto* card = makeCard(content);
+    auto* box = new QVBoxLayout(card);
+    box->setContentsMargins(16,14,16,16);
+    box->setSpacing(10);
+    box->addWidget(heading(QStringLiteral("Wipe Activity Log"), card));
+    box->addWidget(bodyText(QStringLiteral("Persistent audit history. Each attempted wipe records the signed-in operator, full timestamp, target/location, method, outcome, verification, ML analysis and the associated certificate."), card));
+    auto* controls = new QHBoxLayout;
+    controls->addStretch();
+    auto* refresh = new QPushButton(QStringLiteral("Refresh Log"), card);
+    stylePrimaryButton(refresh);
+    connect(refresh, &QPushButton::clicked, this, &MainWindow::refreshActivityLog);
+    controls->addWidget(refresh);
+    box->addLayout(controls);
+    m_activityTable = new QTableWidget(card);
+    m_activityTable->setColumnCount(9);
+    m_activityTable->setHorizontalHeaderLabels({
+        QStringLiteral("Date / Time (with offset)"), QStringLiteral("Signed-in user"),
+        QStringLiteral("File / Drive"), QStringLiteral("File path / location"),
+        QStringLiteral("Wipe method"), QStringLiteral("Outcome"),
+        QStringLiteral("Verification"), QStringLiteral("ML analysis"),
+        QStringLiteral("Certificate ID")});
+    styleAuditTable(m_activityTable);
+    m_activityTable->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
+    m_activityTable->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Stretch);
+    m_activityTable->horizontalHeader()->setSectionResizeMode(7, QHeaderView::Stretch);
+    m_activityTable->setMinimumHeight(340);
+    connect(m_activityTable, &QTableWidget::cellDoubleClicked, this, [this](int row, int) {
+        if (!m_activityTable || !m_activityTable->item(row, 0)) return;
+        const QString path = m_activityTable->item(row, 0)->data(Qt::UserRole).toString();
+        if (!path.isEmpty() && QFileInfo::exists(path))
+            QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+    });
+    box->addWidget(m_activityTable, 1);
+    layout->addWidget(card, 1);
+    return scrollPage(content);
+}
+
+QWidget* MainWindow::buildCertificatesPage()
+{
+    auto* content = new QWidget;
+    auto* layout = new QVBoxLayout(content);
+    layout->setContentsMargins(4,4,8,8);
+    layout->setSpacing(12);
+    auto* card = makeCard(content);
+    auto* box = new QVBoxLayout(card);
+    box->setContentsMargins(16,14,16,16);
+    box->setSpacing(10);
+    box->addWidget(heading(QStringLiteral("Wipe Certificates"), card));
+    box->addWidget(bodyText(QStringLiteral("One HTML certificate is generated for each recorded wipe attempt, including failed or unverified attempts. Double-click a row or select it and choose Open Certificate."), card));
+    auto* controls = new QHBoxLayout;
+    controls->addStretch();
+    auto* refresh = new QPushButton(QStringLiteral("Refresh Certificates"), card);
+    stylePrimaryButton(refresh);
+    connect(refresh, &QPushButton::clicked, this, &MainWindow::refreshCertificates);
+    controls->addWidget(refresh);
+    auto* open = new QPushButton(QStringLiteral("Open Certificate"), card);
+    stylePrimaryButton(open);
+    connect(open, &QPushButton::clicked, this, [this]() {
+        if (!m_certificatesTable || m_certificatesTable->currentRow() < 0) return;
+        const int row = m_certificatesTable->currentRow();
+        const QString path = m_certificatesTable->item(row, 0)
+            ? m_certificatesTable->item(row, 0)->data(Qt::UserRole).toString() : QString();
+        if (!path.isEmpty() && QFileInfo::exists(path))
+            QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+        else
+            QMessageBox::warning(this, QStringLiteral("Certificate unavailable"),
+                QStringLiteral("The certificate file could not be found for the selected record."));
+    });
+    controls->addWidget(open);
+    box->addLayout(controls);
+    m_certificatesTable = new QTableWidget(card);
+    m_certificatesTable->setColumnCount(8);
+    m_certificatesTable->setHorizontalHeaderLabels({
+        QStringLiteral("Date / Time"), QStringLiteral("Certificate ID"),
+        QStringLiteral("Signed-in user"), QStringLiteral("File / Drive"),
+        QStringLiteral("Source / Location"), QStringLiteral("Wipe method"),
+        QStringLiteral("Outcome"), QStringLiteral("ML analysis")});
+    styleAuditTable(m_certificatesTable);
+    m_certificatesTable->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
+    m_certificatesTable->horizontalHeader()->setSectionResizeMode(4, QHeaderView::Stretch);
+    m_certificatesTable->horizontalHeader()->setSectionResizeMode(7, QHeaderView::Stretch);
+    m_certificatesTable->setMinimumHeight(340);
+    connect(m_certificatesTable, &QTableWidget::cellDoubleClicked, this, [this](int row, int) {
+        if (!m_certificatesTable || !m_certificatesTable->item(row, 0)) return;
+        const QString path = m_certificatesTable->item(row, 0)->data(Qt::UserRole).toString();
+        if (!path.isEmpty() && QFileInfo::exists(path))
+            QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+    });
+    box->addWidget(m_certificatesTable, 1);
+    layout->addWidget(card, 1);
+    return scrollPage(content);
+}
+
+void MainWindow::refreshActivityLog()
+{
+    if (!m_activityTable) return;
+    const QJsonArray records = readAuditRecords();
+    m_activityTable->setRowCount(static_cast<int>(records.size()));
+    int row = 0;
+    for (int i = static_cast<int>(records.size()) - 1; i >= 0; --i, ++row) {
+        const QJsonObject r = records.at(i).toObject();
+        const QString certPath = r.value(QStringLiteral("certificatePath")).toString();
+        const QStringList values = {
+            r.value(QStringLiteral("timestamp")).toString(),
+            r.value(QStringLiteral("user")).toString(),
+            r.value(QStringLiteral("fileName")).toString(),
+            r.value(QStringLiteral("filePath")).toString(),
+            QStringLiteral("%1 (%2 pass(es))").arg(r.value(QStringLiteral("method")).toString(),
+                r.value(QStringLiteral("passes")).toString()),
+            r.value(QStringLiteral("status")).toString(),
+            r.value(QStringLiteral("verification")).toString(),
+            r.value(QStringLiteral("mlResults")).toString(),
+            r.value(QStringLiteral("certificateId")).toString()
+        };
+        for (int col = 0; col < values.size(); ++col) {
+            auto* item = new QTableWidgetItem(values.at(col));
+            item->setForeground(QColor(QStringLiteral("#f4f8ff")));
+            item->setToolTip(values.at(col));
+            m_activityTable->setItem(row, col, item);
+        }
+        m_activityTable->item(row, 0)->setData(Qt::UserRole, certPath);
+    }
+    m_activityTable->resizeRowsToContents();
+}
+
+void MainWindow::refreshCertificates()
+{
+    if (!m_certificatesTable) return;
+    const QJsonArray records = readAuditRecords();
+    m_certificatesTable->setRowCount(static_cast<int>(records.size()));
+    int row = 0;
+    for (int i = static_cast<int>(records.size()) - 1; i >= 0; --i, ++row) {
+        const QJsonObject r = records.at(i).toObject();
+        const QString certPath = r.value(QStringLiteral("certificatePath")).toString();
+        const QStringList values = {
+            r.value(QStringLiteral("timestamp")).toString(),
+            r.value(QStringLiteral("certificateId")).toString(),
+            r.value(QStringLiteral("user")).toString(),
+            r.value(QStringLiteral("fileName")).toString(),
+            r.value(QStringLiteral("source")).toString() + QStringLiteral(" — ") + r.value(QStringLiteral("filePath")).toString(),
+            QStringLiteral("%1 (%2 pass(es))").arg(r.value(QStringLiteral("method")).toString(),
+                r.value(QStringLiteral("passes")).toString()),
+            r.value(QStringLiteral("status")).toString(),
+            r.value(QStringLiteral("mlResults")).toString()
+        };
+        for (int col = 0; col < values.size(); ++col) {
+            auto* item = new QTableWidgetItem(values.at(col));
+            item->setForeground(QColor(QStringLiteral("#f4f8ff")));
+            item->setToolTip(values.at(col));
+            m_certificatesTable->setItem(row, col, item);
+        }
+        m_certificatesTable->item(row, 0)->setData(Qt::UserRole, certPath);
+    }
+    m_certificatesTable->resizeRowsToContents();
+}
+
+void MainWindow::recordWipeActivity(const QString& fileName, const QString& filePath,
+                                    const QString& source, const QString& driveLetter,
+                                    const QString& physicalDevicePath, const QString& deviceModel,
+                                    const QString& method, int passes, bool success,
+                                    const QString& verification, unsigned long long bytesWiped,
+                                    const QString& mlResults, const QString& errorMessage)
+{
+    const QString timestamp = QDateTime::currentDateTime().toString(Qt::ISODateWithMs);
+    const QString certificateId = QStringLiteral("DG-%1-%2")
+        .arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmss-zzz")),
+             QUuid::createUuid().toString(QUuid::WithoutBraces).left(8).toUpper());
+    const QString certificateDirectory = QDir(auditRootPath()).filePath(QStringLiteral("Certificates"));
+    QDir().mkpath(certificateDirectory);
+    const QString certificatePath = QDir(certificateDirectory).filePath(
+        QStringLiteral("Certificate_%1.html").arg(certificateId));
+
+    QJsonObject record;
+    record.insert(QStringLiteral("timestamp"), timestamp);
+    record.insert(QStringLiteral("user"), m_signedInUser.trimmed().isEmpty()
+        ? QStringLiteral("Unknown / no active session") : m_signedInUser.trimmed());
+    record.insert(QStringLiteral("fileName"), fileName);
+    record.insert(QStringLiteral("filePath"), filePath);
+    record.insert(QStringLiteral("source"), source);
+    record.insert(QStringLiteral("driveLetter"), driveLetter);
+    record.insert(QStringLiteral("physicalDevicePath"), physicalDevicePath);
+    record.insert(QStringLiteral("deviceModel"), deviceModel);
+    record.insert(QStringLiteral("method"), method);
+    record.insert(QStringLiteral("passes"), QString::number(passes));
+    record.insert(QStringLiteral("status"), success ? QStringLiteral("SUCCESS") : QStringLiteral("FAILED"));
+    record.insert(QStringLiteral("verification"), verification);
+    record.insert(QStringLiteral("bytesWiped"), QString::number(bytesWiped));
+    record.insert(QStringLiteral("mlResults"), mlResults);
+    record.insert(QStringLiteral("errorMessage"), errorMessage);
+    record.insert(QStringLiteral("certificateId"), certificateId);
+    record.insert(QStringLiteral("certificatePath"), certificatePath);
+    record.insert(QStringLiteral("recordDigestSha256"), auditRecordDigest(record));
+
+    const QByteArray html = certificateHtml(record).toUtf8();
+    QSaveFile certificateFile(certificatePath);
+    const bool certificateSaved = certificateFile.open(QIODevice::WriteOnly)
+        && certificateFile.write(html) == html.size()
+        && certificateFile.commit();
+    if (!certificateSaved) {
+        record.insert(QStringLiteral("certificatePath"), QString());
+        record.insert(QStringLiteral("certificateError"), QStringLiteral("Certificate HTML could not be written."));
+        record.insert(QStringLiteral("recordDigestSha256"), auditRecordDigest(record));
+    }
+
+    QJsonArray records = readAuditRecords();
+    records.append(record);
+    if (!writeAuditRecords(records)) {
+        QMessageBox::warning(this, QStringLiteral("Audit log write failed"),
+            QStringLiteral("The operation completed, but DataGuard could not persist the activity record to the application data directory."));
+    }
+    if (!certificateSaved) {
+        QMessageBox::warning(this, QStringLiteral("Certificate generation failed"),
+            QStringLiteral("The activity was recorded, but the HTML certificate could not be saved. Check write access to the DataGuard application data directory."));
+    }
+}
+
 QWidget* MainWindow::buildPlaceholderPage(const QString& titleText,const QString& message,const QString& glyph)
 {
     auto* p=new QWidget;auto* l=new QVBoxLayout(p);l->setContentsMargins(4,8,8,12);l->addStretch();auto* c=makeCard(p);c->setMaximumWidth(680);auto* b=new QVBoxLayout(c);b->setContentsMargins(32,32,32,32);b->setSpacing(14);auto* icon=new QLabel(glyph,c);icon->setAlignment(Qt::AlignCenter);icon->setStyleSheet(QStringLiteral("color:#70dcf7; font-size:32px;"));b->addWidget(icon);auto* h=heading(titleText,c);h->setAlignment(Qt::AlignCenter);h->setStyleSheet(QStringLiteral("color:#f4f8ff; font-size:24px; font-weight:700;"));b->addWidget(h);auto* m=bodyText(message,c);m->setAlignment(Qt::AlignCenter);b->addWidget(m);l->addWidget(c,0,Qt::AlignHCenter);l->addStretch();return p;
@@ -387,6 +752,17 @@ void MainWindow::onWipeClicked() {
     if (row >= (int)drives.size()) return;
     auto &drive = drives[row];
 
+    auto auditOperation = [this, &drive](const QString& fileName, const QString& filePath,
+                                         const QString& source, const QString& methodName,
+                                         int passes, bool success, const QString& verification,
+                                         unsigned long long bytes, const QString& mlResults,
+                                         const QString& error) {
+        recordWipeActivity(fileName, filePath, source,
+            QStringLiteral("%1:").arg(QChar(drive.letter)),
+            QString::fromStdString(drive.path), QString::fromStdString(drive.model),
+            methodName, passes, success, verification, bytes, mlResults, error);
+    };
+
     // Collect selected files
     std::vector<FileToWipe> selectedFiles;
     collectSelectedFiles(fileTree->invisibleRootItem(), selectedFiles);
@@ -425,6 +801,17 @@ void MainWindow::onWipeClicked() {
                         .arg(pass).arg(totalPasses).arg(percent));
                 QApplication::processEvents();
             });
+
+        auditOperation(QStringLiteral("[FULL DRIVE WIPE]"),
+            QStringLiteral("%1: (entire drive)").arg(QChar(drive.letter)),
+            QStringLiteral("Full drive wipe"), wipeMethodCombo->currentText(),
+            passesForMethod(methodIndex), result.success,
+            QStringLiteral("Not separately reported by the current full-drive wipe API"),
+            result.bytesWiped,
+            QStringLiteral("ML analysis is not generated for full-drive operations by the current pipeline."),
+            QString::fromStdString(result.errorMessage));
+        refreshActivityLog();
+        refreshCertificates();
 
         wipeButton->setEnabled(true);
         refreshButton->setEnabled(true);
@@ -494,6 +881,13 @@ void MainWindow::onWipeClicked() {
     );
 
     if (!beforeRead.success) {
+        const QString auditPath = auditPathForFile(file, drive.letter);
+        auditOperation(QString::fromStdString(file.name), auditPath,
+            QStringLiteral("Deleted Files section / physical extents"),
+            wipeMethodCombo->currentText(), passesForMethod(methodIndex), false,
+            QStringLiteral("Not performed — pre-wipe fingerprint read failed"), 0,
+            QStringLiteral("ML analysis not generated because the original fingerprint could not be read."),
+            QString::fromStdString(beforeRead.errorMessage));
         QMessageBox::warning(
             this,
             "BEFORE Fingerprint Failed",
@@ -516,6 +910,13 @@ void MainWindow::onWipeClicked() {
     QApplication::processEvents();
 
     if (file.fileEntry.extents.empty()) {
+        const QString auditPath = auditPathForFile(file, drive.letter);
+        auditOperation(QString::fromStdString(file.name), auditPath,
+            QStringLiteral("Deleted Files section / physical extents"),
+            wipeMethodCombo->currentText(), passesForMethod(methodIndex), false,
+            QStringLiteral("Not performed — no physical extents available"), 0,
+            QStringLiteral("ML analysis not generated because no wipeable physical extents were found."),
+            QStringLiteral("No physical extents were found for this deleted-file entry."));
         QMessageBox::warning(
             this,
             "Wipe Failed",
@@ -543,6 +944,14 @@ void MainWindow::onWipeClicked() {
     );
 
     if (!result.success) {
+        const QString auditPath = auditPathForFile(file, drive.letter);
+        auditOperation(QString::fromStdString(file.name), auditPath,
+            QStringLiteral("Deleted Files section / physical extents"),
+            wipeMethodCombo->currentText(), passesForMethod(methodIndex), false,
+            QStringLiteral("Not verified — the wipe operation failed"),
+            result.bytesWiped,
+            QStringLiteral("ML analysis not generated because the deleted-file wipe did not complete."),
+            QString::fromStdString(result.errorMessage));
         QMessageBox::warning(
             this,
             "Wipe Failed",
@@ -586,6 +995,14 @@ void MainWindow::onWipeClicked() {
                 ))
         );
 
+        const QString auditPath = auditPathForFile(file, drive.letter);
+        auditOperation(QString::fromStdString(file.name), auditPath,
+            QStringLiteral("Deleted Files section / physical extents"),
+            wipeMethodCombo->currentText(), passesForMethod(methodIndex), false,
+            QStringLiteral("FAILED — final-pass extent verification did not pass"),
+            result.bytesWiped,
+            QStringLiteral("ML analysis not generated because verification failed."),
+            QString::fromStdString(verificationResult.errorMessage));
         continue;
     }
 
@@ -798,6 +1215,28 @@ else if (riskLevel == 2) {
     );
 }
 
+const QString deletedAuditPath = auditPathForFile(file, drive.letter);
+QString deletedMlResults = QStringLiteral("ML analysis was not generated for this operation.");
+if (similarityScoreFile == file.name) {
+    deletedMlResults = QStringLiteral("Similarity score: %1%\nRecoverability score: %2\nRisk level: %3\nRecommendation: %4")
+        .arg(similarityScore * 100.0, 0, 'f', 2)
+        .arg(recoverabilityScoreGenerated ? QString::number(recoverabilityScore * 100.0, 'f', 2) + QStringLiteral("%") : QStringLiteral("Not generated"))
+        .arg(recoverabilityScoreGenerated
+            ? (riskLevel == 0 ? QStringLiteral("LOW") : (riskLevel == 1 ? QStringLiteral("MEDIUM") : QStringLiteral("HIGH")))
+            : QStringLiteral("Not generated"))
+        .arg(recoverabilityScoreGenerated && !wipeRecommendation.empty()
+            ? QString::fromStdString(wipeRecommendation) : QStringLiteral("Not generated"));
+}
+const QString postWipeMlError = QStringLiteral("Post-wipe extents were wiped and verified, but post-wipe feature extraction or ML analysis did not complete.");
+const bool deletedMlSucceeded = similarityScoreFile == file.name && recoverabilityScoreGenerated;
+auditOperation(QString::fromStdString(file.name), deletedAuditPath,
+    QStringLiteral("Deleted Files section / physical extents"),
+    wipeMethodCombo->currentText(), passesForMethod(methodIndex), true,
+    QStringLiteral("PASSED — physical extents matched the expected final-pass data"),
+    result.bytesWiped,
+    deletedMlSucceeded ? deletedMlResults : postWipeMlError,
+    QString());
+
 } else {
     std::string filePath =
         std::string(1, currentDriveLetter) + ":\\" + file.name;
@@ -805,6 +1244,14 @@ else if (riskLevel == 2) {
     QString qFilePath = QString::fromStdString(filePath);
 
     auto result = engine.wipeFile(qFilePath, method);
+
+    auditOperation(QString::fromStdString(file.name), qFilePath,
+        QStringLiteral("Existing files section"),
+        wipeMethodCombo->currentText(), passesForMethod(methodIndex), result.success,
+        QStringLiteral("Not separately reported by the current standard-file wipe path"),
+        result.bytesWiped,
+        QStringLiteral("ML analysis was not generated by the current standard-file wipe path."),
+        QString::fromStdString(result.errorMessage));
 
     if (result.success) {
         wipedSize += result.bytesWiped;
@@ -821,6 +1268,8 @@ else if (riskLevel == 2) {
 }
         }
 
+        refreshActivityLog();
+        refreshCertificates();
         wipeButton->setEnabled(true);
         refreshButton->setEnabled(true);
         progressBar->setValue(100);
