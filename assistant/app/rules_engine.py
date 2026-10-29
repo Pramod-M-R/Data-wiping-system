@@ -381,7 +381,7 @@ def answer_question(
             navigation=[_nav("Review Scan Results", "scan_results")],
         )
 
-    if intent in {"ml_explanation", "verification", "operation_status"}:
+    if intent in {"ml_explanation", "verification", "operation_status", "error"}:
         relevant_operation = _pick_relevant_record(question, _activity_records(context))
         if relevant_operation:
             operation = relevant_operation
