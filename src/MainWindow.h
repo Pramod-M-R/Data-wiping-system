@@ -20,6 +20,12 @@ class QStackedWidget;
 class QToolButton;
 class QTableWidget;
 class QJsonObject;
+class QProcess;
+class QTimer;
+class QTextBrowser;
+class QLineEdit;
+class QGridLayout;
+class QHBoxLayout;
 #include "FeatureExtractor.h"
 #include "FileScanner.h"
 
@@ -66,12 +72,21 @@ private:
     QWidget* buildOperationsPage();
     QWidget* buildActivityLogPage();
     QWidget* buildCertificatesPage();
+    QWidget* buildAssistantPage();
     QWidget* buildPlaceholderPage(const QString& headingText, const QString& message, const QString& glyph);
     QWidget* buildSettingsPage();
     void navigateTo(int pageIndex, const QString& title);
     void signOut();
     void refreshActivityLog();
     void refreshCertificates();
+    QJsonObject buildAssistantContext();
+    void sendAssistantQuestion();
+    void clearAssistantConversation();
+    void appendAssistantMessage(const QString& role, const QString& text);
+    void renderAssistantResponse(const QJsonObject& response);
+    void handleAssistantUnavailable(const QString& reason);
+    void setAssistantBusy(bool busy);
+    void addAssistantNavigationButtons(const QJsonArray& suggestions);
     void recordWipeActivity(const QString& fileName, const QString& filePath,
                             const QString& source, const QString& driveLetter,
                             const QString& physicalDevicePath, const QString& deviceModel,
@@ -93,6 +108,24 @@ private:
     QTableWidget* m_activityTable = nullptr;
     QTableWidget* m_certificatesTable = nullptr;
     QVector<QToolButton*> m_navigationButtons;
+
+    // The assistant is a separate local subprocess. It receives allowlisted
+    // metadata only and never receives access to storage-engine objects.
+    QProcess* m_assistantProcess = nullptr;
+    QTimer* m_assistantTimeoutTimer = nullptr;
+    QTextBrowser* m_assistantTranscript = nullptr;
+    QLineEdit* m_assistantInput = nullptr;
+    QPushButton* m_assistantSendButton = nullptr;
+    QPushButton* m_assistantClearButton = nullptr;
+    QLabel* m_assistantStatus = nullptr;
+    QGridLayout* m_assistantSuggestionsLayout = nullptr;
+    QHBoxLayout* m_assistantNavigationLayout = nullptr;
+    QVector<QPushButton*> m_assistantSuggestionButtons;
+    QVector<QPushButton*> m_assistantNavigationButtons;
+    QString m_assistantPendingQuestion;
+    QByteArray m_assistantStdout;
+    bool m_assistantTimedOut = false;
+    int m_lastNonAssistantPageIndex = 0;
 
 std::map<std::string, FileEntry> deletedFileEntries;
 std::map<std::string, FeatureVector> beforeFingerprints;
