@@ -858,6 +858,7 @@ QJsonObject MainWindow::buildAssistantContext()
     if (screenIndex == 6) screenIndex = m_lastNonAssistantPageIndex;
     if (screenIndex < 0 || screenIndex >= screenNames.size()) screenIndex = 0;
     context.insert(QStringLiteral("screen"), screenNames.at(screenIndex));
+    char selectedDriveLetter = 0;
 
     // Read-only device summary. Do not expose raw physical paths or serial numbers.
     if (driveList && driveList->currentRow() >= 0) {
@@ -866,6 +867,7 @@ QJsonObject MainWindow::buildAssistantContext()
         const int row = driveList->currentRow();
         if (row < static_cast<int>(drives.size())) {
             const auto& drive = drives.at(static_cast<size_t>(row));
+            selectedDriveLetter = drive.letter;
             QJsonObject device;
             device.insert(QStringLiteral("display_name"),
                 QStringLiteral("USB Drive %1:").arg(QChar(drive.letter)));
@@ -878,8 +880,12 @@ QJsonObject MainWindow::buildAssistantContext()
         }
     }
 
-    // A scan is considered current only while its result tree is still present.
-    if (fileTree && scanStatusLabel && fileTree->topLevelItemCount() > 0 &&
+    // A scan is current only if the selected physical device is the one scanned.
+    const bool scanMatchesSelectedDevice =
+        selectedDriveLetter != 0 &&
+        m_assistantScannedDriveLetter == selectedDriveLetter;
+    if (scanMatchesSelectedDevice && fileTree && scanStatusLabel &&
+        fileTree->topLevelItemCount() > 0 &&
         scanStatusLabel->text().startsWith(QStringLiteral("Scan complete"))) {
         int existingCount = 0, deletedCount = 0, hiddenCount = 0;
         std::function<void(QTreeWidgetItem*)> visit;
@@ -911,10 +917,15 @@ QJsonObject MainWindow::buildAssistantContext()
     }
 
     std::vector<FileToWipe> selected;
-    if (fileTree) collectSelectedFiles(fileTree->invisibleRootItem(), selected);
+    if (scanMatchesSelectedDevice && fileTree)
+        collectSelectedFiles(fileTree->invisibleRootItem(), selected);
     QJsonObject selectedOperation;
     if (wipeMethodCombo) selectedOperation.insert(QStringLiteral("wipe_method"), wipeMethodCombo->currentText());
-    if (!selected.empty()) {
+    if (!scanMatchesSelectedDevice && screenIndex == 3) {
+        selectedOperation.insert(QStringLiteral("workflow"),
+            QStringLiteral("current_drive_scan_required_before_target_context"));
+        context.insert(QStringLiteral("selected_operation"), selectedOperation);
+    } else if (!selected.empty()) {
         selectedOperation.insert(QStringLiteral("workflow"), QStringLiteral("selected_file_wipe"));
         selectedOperation.insert(QStringLiteral("selected_file_count"), static_cast<int>(selected.size()));
         QJsonArray selectedFiles;
@@ -1183,7 +1194,8 @@ void MainWindow::sendAssistantQuestion()
     arguments << QFileInfo(script).absoluteFilePath();
 
     QJsonObject request;
-    request.insert(QStringLiteral("request_id"), QUuid::createUuid().toString(QUuid::WithoutBraces));
+    m_assistantPendingRequestId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    request.insert(QStringLiteral("request_id"), m_assistantPendingRequestId);
     request.insert(QStringLiteral("question"), question);
     request.insert(QStringLiteral("context"), buildAssistantContext());
     const QByteArray payload = QJsonDocument(request).toJson(QJsonDocument::Compact);
@@ -1237,7 +1249,7 @@ void MainWindow::sendAssistantQuestion()
                 return;
             }
             const QJsonObject response = doc.object();
-            if (response.value(QStringLiteral("request_id")).toString().isEmpty() ||
+            if (response.value(QStringLiteral("request_id")).toString() != m_assistantPendingRequestId ||
                 !response.value(QStringLiteral("answer")).isString()) {
                 handleAssistantUnavailable(QStringLiteral("the assistant response was incomplete"));
                 return;
@@ -1269,6 +1281,7 @@ QWidget* MainWindow::buildSettingsPage()
 void MainWindow::onRefreshClicked() {
     driveList->clear();
     fileTree->clear();
+    m_assistantScannedDriveLetter = 0;
     wipeButton->setEnabled(false);
     scanButton->setEnabled(false);
     statusLabel->setText("Scanning ports...");
@@ -1316,6 +1329,7 @@ void MainWindow::onScanClicked() {
     // Store current drive info for wipe operation
     currentDriveLetter = drive.letter;
     currentDrivePath = drive.path;
+    m_assistantScannedDriveLetter = drive.letter;
 
     // ── Root drive node ────────────────────────────────────
     auto *rootItem = new QTreeWidgetItem(fileTree);
