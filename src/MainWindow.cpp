@@ -194,7 +194,6 @@ QString certificateHtml(const QJsonObject& record)
     auto escLines = [](const QString& value) {
         return value.toHtmlEscaped().replace(QStringLiteral("\n"), QStringLiteral("<br>"));
     };
-    const QString rawMl = record.value(QStringLiteral("mlResults")).toString().trimmed();
     QString ml = mlTableSummary(record);
     if (ml == QStringLiteral("ML analysis details available on hover"))
         ml = QStringLiteral("ML analysis was not reported for this operation.");
