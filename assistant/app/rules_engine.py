@@ -1,0 +1,336 @@
+"""Deterministic answers grounded in the current DataGuard snapshot."""
+from __future__ import annotations
+
+from typing import Any
+
+try:
+    from .knowledge_base import load_knowledge
+except ImportError:  # executed as a local script by QProcess
+    from knowledge_base import load_knowledge
+
+
+def _nav(label: str, destination: str) -> dict[str, str]:
+    return {"label": label, "destination": destination}
+
+
+def _result(
+    answer: str,
+    kind: str,
+    caveats: list[str] | None = None,
+    navigation: list[dict[str, str]] | None = None,
+    requires_action: bool = False,
+) -> dict[str, Any]:
+    return {
+        "answer": answer,
+        "answer_type": kind,
+        "caveats": caveats or [],
+        "suggested_navigation": navigation or [],
+        "requires_user_action": requires_action,
+        "source": "rule_based",
+    }
+
+
+def _last_operation(context: dict[str, Any]) -> dict[str, Any]:
+    value = context.get("last_recorded_operation")
+    return value if isinstance(value, dict) else {}
+
+
+def _format_operation(operation: dict[str, Any]) -> str:
+    pieces = []
+    labels = (
+        ("file_name", "Target"),
+        ("method", "Method"),
+        ("status", "Recorded result"),
+        ("timestamp", "Recorded time"),
+        ("verification", "Verification"),
+        ("error_message", "Error"),
+    )
+    for key, label in labels:
+        value = operation.get(key)
+        if isinstance(value, str) and value.strip():
+            pieces.append(f"{label}: {value.strip()}")
+    return "\n".join(pieces)
+
+
+def answer_question(
+    question: str, intent: str, context: dict[str, Any]
+) -> dict[str, Any]:
+    q = question.casefold()
+    screen = context.get("screen", "unknown")
+    device = context.get("device", {})
+    scan = context.get("scan_summary", {})
+    selected = context.get("selected_operation", {})
+    operation = _last_operation(context)
+    certificate = context.get("certificate", {})
+    knowledge = load_knowledge()
+
+    if intent == "greeting":
+        return _result(
+            "Hello! I'm the DataGuard Assistant. I can explain the current scan, device information, wipe methods, recorded operation results, ML estimates, and certificates. I can guide you to a screen, but I cannot run a wipe or recovery for you.",
+            "greeting",
+            navigation=[_nav("Review Scan Results", "scan_results"), _nav("View Activity Log", "activity_log")],
+        )
+
+    if intent == "help":
+        return _result(
+            "I can help you understand device and scan summaries, explain wipe-method trade-offs, interpret a recorded error or verification result, and find a certificate. My answers use only the current application snapshot and approved local help. If a value is unavailable, I'll say so rather than guess.",
+            "help",
+            caveats=["I provide guidance only; all storage actions must be performed in the application's normal validated workflow."],
+            navigation=[_nav("Devices", "devices"), _nav("Scan Results", "scan_results"), _nav("Certificates", "certificates")],
+        )
+
+    if intent == "destructive_request":
+        return _result(
+            "I can't execute a wipe or recovery from chat. To continue safely, open Operations, confirm the selected USB drive and exact target, verify your backup, then use the application's normal confirmation dialog. If you are unsure about the target, cancel and review Scan Results first.",
+            "safety_guidance",
+            caveats=["Wiping is destructive. Chat text cannot bypass target validation, permissions, or confirmation."],
+            navigation=[_nav("Review Scan Results", "scan_results"), _nav("Open Operations", "operations")],
+            requires_action=True,
+        )
+
+    if intent == "device_info":
+        if not isinstance(device, dict) or not device:
+            return _result(
+                "No selected-device details are available in the current application context. Open Devices, refresh the device list, and select the intended drive. I won't assume a device is connected from an earlier message.",
+                "device_information",
+                navigation=[_nav("Open Devices", "devices")],
+                requires_action=True,
+            )
+        if device.get("connected") is False:
+            return _result(
+                "The current snapshot marks the selected device as disconnected. Refresh Devices and select a currently connected device before continuing.",
+                "device_information",
+                navigation=[_nav("Refresh Devices", "devices")],
+                requires_action=True,
+            )
+        parts = []
+        if device.get("display_name"):
+            parts.append(f"Selected device: {device['display_name']}.")
+        if device.get("model"):
+            parts.append(f"Reported model: {device['model']}.")
+        if device.get("drive_letter"):
+            parts.append(f"Drive letter: {device['drive_letter']}.")
+        if isinstance(device.get("capacity_bytes"), int):
+            parts.append(f"Reported capacity: {device['capacity_bytes'] / (1024 ** 3):.2f} GiB.")
+        if device.get("filesystem"):
+            parts.append(f"Filesystem: {device['filesystem']}.")
+        else:
+            parts.append("The current application snapshot does not report the filesystem.")
+        parts.append("Recheck the drive identity in Devices before any destructive operation.")
+        return _result(
+            " ".join(parts),
+            "device_information",
+            caveats=["A selected-device label is context, not a substitute for confirming the physical target."],
+            navigation=[_nav("Open Devices", "devices")],
+        )
+
+    if intent == "scan_explanation":
+        if not isinstance(scan, dict) or not scan:
+            return _result(
+                "There is no current scan summary available. Select the intended drive in Devices, run Scan Selected Drive, and then ask again. I won't reuse a previous assistant message as evidence of a current scan.",
+                "scan_explanation",
+                navigation=[_nav("Open Devices", "devices"), _nav("Review Scan Results", "scan_results")],
+                requires_action=True,
+            )
+        counts = []
+        for key, label in (
+            ("existing_entries", "existing entries"),
+            ("potentially_deleted_entries", "potentially deleted entries"),
+            ("hidden_entries", "hidden entries"),
+        ):
+            if key in scan:
+                counts.append(f"{scan[key]} {label}")
+        status = scan.get("scan_status", "not supplied")
+        answer = "Current scan summary: " + (", ".join(counts) if counts else "entry counts were not supplied") + f". Scan status: {status}."
+        deleted_count = scan.get("potentially_deleted_entries", 0)
+        caveats = list(scan.get("limitations", []))
+        if isinstance(deleted_count, int) and deleted_count > 0:
+            answer += " A deleted directory entry is only a candidate; it does not prove that the original contents are intact or recoverable."
+            caveats.append("Results depend on filesystem support, available metadata, and scan coverage.")
+        if "error" in scan:
+            answer += f" Scanner message: {scan['error']}."
+        return _result(
+            answer,
+            "scan_explanation",
+            caveats=caveats,
+            navigation=[_nav("Review Scan Results", "scan_results")],
+        )
+
+    if intent == "ml_explanation":
+        summary = operation.get("ml_summary", "")
+        if not summary:
+            summary = certificate.get("ml_summary", "") if isinstance(certificate, dict) else ""
+        if not summary:
+            return _result(
+                "No ML analysis summary was supplied for the current operation or selected certificate. I won't calculate or invent similarity or recoverability percentages. Open Activity Log or Certificates to inspect the recorded result.",
+                "ml_explanation",
+                caveats=["ML scores are estimates and do not by themselves prove recoverability or permanent irrecoverability."],
+                navigation=[_nav("Open Activity Log", "activity_log"), _nav("Open Certificates", "certificates")],
+            )
+        return _result(
+            f"Recorded ML summary:\n{summary}\n\nThese values are the application's recorded output, not an independent measurement by the assistant.",
+            "ml_explanation",
+            caveats=["Treat ML scores as estimates, not guarantees."],
+            navigation=[_nav("Open Activity Log", "activity_log"), _nav("Open Certificates", "certificates")],
+        )
+
+    if intent in {"verification", "operation_status"}:
+        formatted = _format_operation(operation)
+        if not formatted:
+            formatted = _format_operation(certificate)
+        if not formatted:
+            return _result(
+                "I don't have a recorded operation result in the current context, so I can't say whether a wipe completed or verification passed. Open Activity Log and select the relevant record.",
+                "operation_status",
+                navigation=[_nav("Open Activity Log", "activity_log")],
+            )
+        result = (
+            "Here is the operation information recorded by DataGuard:\n"
+            f"{formatted}\n\n"
+            "A successful execution status and a successful verification are different claims. The recorded verification field shows what the application reported; it is not a blanket guarantee of irrecoverability."
+        )
+        return _result(
+            result,
+            "verification_explanation" if intent == "verification" else "operation_status",
+            caveats=["The assistant does not independently verify the storage device."],
+            navigation=[_nav("Open Activity Log", "activity_log"), _nav("Open Certificates", "certificates")],
+        )
+
+    if intent == "certificate":
+        if not isinstance(certificate, dict) or not certificate:
+            return _result(
+                "No specific certificate is selected in the current context. Open Certificates, select the certificate you want to inspect, and open its PDF. I can't claim that a certificate exists unless the application supplies its record.",
+                "certificate_guidance",
+                navigation=[_nav("Open Certificates", "certificates")],
+                requires_action=True,
+            )
+        values = []
+        for key, label in (
+            ("certificate_id", "Certificate ID"),
+            ("timestamp", "Date and time"),
+            ("user", "Signed-in user"),
+            ("file_name", "File or drive"),
+            ("location", "Location"),
+            ("method", "Wipe method"),
+            ("status", "Recorded outcome"),
+            ("verification", "Verification"),
+            ("ml_summary", "ML analysis"),
+        ):
+            value = certificate.get(key)
+            if value:
+                values.append(f"{label}: {value}")
+        return _result(
+            "Certificate information supplied by the application:\n" + "\n".join(values) +
+            "\n\nThe certificate records application-reported details; its assurance is limited to the checks actually performed and recorded.",
+            "certificate_explanation",
+            caveats=["A certificate alone is not a universal guarantee that all copies of data are permanently irrecoverable."],
+            navigation=[_nav("Open Certificates", "certificates")],
+        )
+
+    if intent == "error":
+        errors = knowledge.get("known_errors", {})
+        recorded_error = operation.get("error_message", "")
+        matched = None
+        if isinstance(errors, dict):
+            candidates = []
+            if recorded_error:
+                candidates.append(recorded_error.casefold())
+            candidates.append(q)
+            for pattern, entry in errors.items():
+                if not isinstance(pattern, str) or not isinstance(entry, dict):
+                    continue
+                if any(pattern.casefold() in candidate for candidate in candidates):
+                    matched = entry
+                    break
+        if matched:
+            explanation = matched.get("explanation", "")
+            steps = matched.get("safe_steps", [])
+            answer = explanation or "The application recorded an error, but there is not enough context to identify the exact cause."
+            if isinstance(steps, list) and steps:
+                answer += "\nSafe next steps:\n" + "\n".join(f"• {step}" for step in steps[:4] if isinstance(step, str))
+        elif recorded_error:
+            answer = f"The latest recorded operation error is: {recorded_error}. The available context does not establish a more specific cause. Do not repeat a destructive operation until the target and error are understood."
+        else:
+            answer = "I don't have a matching recorded error or error code in the current context. Please open Activity Log or the operation result and use the exact message; I won't guess the cause."
+        return _result(
+            answer,
+            "error_explanation",
+            caveats=["If a suggested step could risk data loss, stop and get help rather than retrying the wipe."],
+            navigation=[_nav("Open Activity Log", "activity_log"), _nav("Review Scan Results", "scan_results")],
+        )
+
+    if intent == "recovery_guidance":
+        return _result(
+            "Avoid writing new data to the source drive if recovery matters, because new writes can overwrite remnants. Review scan candidates and use a separate destination for any recovered files. The current context does not confirm an enabled recovery workflow, so I can't promise that this build can restore a particular file.",
+            "recovery_guidance",
+            caveats=["A deleted entry or file signature does not prove its contents can be recovered."],
+            navigation=[_nav("Review Scan Results", "scan_results"), _nav("Open Devices", "devices")],
+        )
+
+    if intent == "operation_selection":
+        if any(term in q for term in ("everything", "all data", "entire drive", "whole drive")):
+            return _result(
+                "If your goal is to erase the whole USB drive, the full-drive wipe workflow is the relevant option. It can destroy data on the selected device. Confirm the exact drive identity and back up anything you need before entering the normal confirmation dialog. I will not start the wipe.",
+                "operation_guidance",
+                caveats=["Do not proceed if the selected drive, its capacity, or its identity is uncertain."],
+                navigation=[_nav("Open Devices", "devices"), _nav("Open Operations", "operations")],
+                requires_action=True,
+            )
+        return _result(
+            "For one particular file, review the exact entry in Scan Results and use the application's file-selection workflow. For the full USB drive, the full-drive wipe is a separate destructive workflow. This assistant cannot select a target or start either operation.",
+            "operation_guidance",
+            caveats=["Per-file erasure reliability depends on filesystem metadata and storage technology."],
+            navigation=[_nav("Review Scan Results", "scan_results"), _nav("Open Operations", "operations")],
+            requires_action=True,
+        )
+
+    if intent == "wipe_guidance":
+        method = selected.get("wipe_method", "")
+        if "method" in q or "single pass" in q or "dod" in q or "pass" in q:
+            method_text = f"The currently selected wipe method is {method}. " if method else "No selected wipe method was supplied in the current context. "
+            return _result(
+                method_text +
+                "Single-pass, DoD 3-pass and DoD 7-pass describe different overwrite patterns in this application's menu. More passes mean more overwrite work, but they do not by themselves guarantee erasure across remapped or flash storage areas.",
+                "wipe_method_guidance",
+                caveats=["Confirm the target and method in Operations before proceeding."],
+                navigation=[_nav("Open Operations", "operations")],
+            )
+        return _result(
+            "Wiping is destructive. Select the intended file or drive in the existing workflow, check its identity, and use the confirmation dialog. A successful overwrite and an independent verification result are separate facts.",
+            "wipe_guidance",
+            caveats=["The assistant cannot initiate wipes, skip confirmation, or establish permanent irrecoverability."],
+            navigation=[_nav("Open Operations", "operations"), _nav("Open Activity Log", "activity_log")],
+        )
+
+    if intent == "navigation":
+        routes = (
+            ("dashboard", ("dashboard",)),
+            ("devices", ("devices",)),
+            ("scan_results", ("scan",)),
+            ("operations", ("operations",)),
+            ("activity_log", ("activity log", "history")),
+            ("certificates", ("certificates",)),
+            ("assistant", ("assistant",)),
+            ("settings", ("settings",)),
+        )
+        for destination, terms in routes:
+            if any(term in q for term in terms):
+                return _result(
+                    f"You can open {destination.replace('_', ' ').title()} using the navigation panel.",
+                    "navigation_guidance",
+                    navigation=[_nav(f"Open {destination.replace('_', ' ').title()}", destination)],
+                )
+
+    if intent == "device_info" or intent == "scan_explanation":
+        return _result(
+            "The current context does not contain enough information to answer that specifically. Open the relevant device or scan screen and ask again.",
+            "missing_context",
+            navigation=[_nav("Open Devices", "devices"), _nav("Review Scan Results", "scan_results")],
+        )
+
+    return _result(
+        "I don't have enough approved application context to answer that reliably yet. Try asking about the current scan, selected device, wipe methods, a recorded error, verification, or a certificate. You can also open the relevant screen and ask again.",
+        "unknown",
+        caveats=["I won't invent device state, scan counts, ML values, operation outcomes, or certificates."],
+        navigation=[_nav("Ask for help", "assistant"), _nav("Review Scan Results", "scan_results")],
+    )
