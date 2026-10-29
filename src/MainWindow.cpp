@@ -1062,6 +1062,10 @@ QJsonObject MainWindow::buildAssistantContext(const QString& question)
         item.insert(QStringLiteral("outcome"), readableOutcome(record));
         item.insert(QStringLiteral("verification"), readableVerification(record));
         item.insert(QStringLiteral("ml_summary"), mlTableSummary(record).left(160));
+        // Keep the exact source shown by the Activity Log hover tooltip available
+        // for explanation, including legacy score details (without validating them).
+        item.insert(QStringLiteral("ml_details"),
+            record.value(QStringLiteral("mlResults")).toString().trimmed().left(1000));
         item.insert(QStringLiteral("error_message"), record.value(QStringLiteral("errorMessage")).toString().left(100));
         item.insert(QStringLiteral("certificate_id"), record.value(QStringLiteral("certificateId")).toString().left(100));
         bool passOk = false;
@@ -1113,6 +1117,8 @@ QJsonObject MainWindow::buildAssistantContext(const QString& question)
             certificate.insert(QStringLiteral("outcome"), readableOutcome(record));
             certificate.insert(QStringLiteral("verification"), readableVerification(record));
             certificate.insert(QStringLiteral("ml_summary"), mlTableSummary(record).left(120));
+            certificate.insert(QStringLiteral("ml_details"),
+                record.value(QStringLiteral("mlResults")).toString().trimmed().left(700));
             const QString pdfPath = record.value(QStringLiteral("certificatePath")).toString();
             certificate.insert(QStringLiteral("pdf_ready"),
                 !pdfPath.isEmpty() && QFileInfo(pdfPath).exists() && QFileInfo(pdfPath).size() > 0);
@@ -1158,6 +1164,8 @@ QJsonObject MainWindow::buildAssistantContext(const QString& question)
             certificate.insert(QStringLiteral("outcome"), readableOutcome(record));
             certificate.insert(QStringLiteral("verification"), readableVerification(record));
             certificate.insert(QStringLiteral("ml_summary"), mlTableSummary(record).left(160));
+            certificate.insert(QStringLiteral("ml_details"),
+                record.value(QStringLiteral("mlResults")).toString().trimmed().left(700));
             const QString pdfPath = record.value(QStringLiteral("certificatePath")).toString();
             certificate.insert(QStringLiteral("pdf_ready"),
                 !pdfPath.isEmpty() && QFileInfo(pdfPath).exists() && QFileInfo(pdfPath).size() > 0);
