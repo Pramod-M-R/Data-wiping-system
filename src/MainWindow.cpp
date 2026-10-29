@@ -194,7 +194,10 @@ QString certificateHtml(const QJsonObject& record)
     auto escLines = [](const QString& value) {
         return value.toHtmlEscaped().replace(QStringLiteral("\n"), QStringLiteral("<br>"));
     };
-    const QString ml = record.value(QStringLiteral("mlResults")).toString().trimmed();
+    const QString rawMl = record.value(QStringLiteral("mlResults")).toString().trimmed();
+    QString ml = mlTableSummary(record);
+    if (ml == QStringLiteral("ML analysis details available on hover"))
+        ml = QStringLiteral("ML analysis was not reported for this operation.");
     const QString errors = record.value(QStringLiteral("errorMessage")).toString().trimmed();
     const QString id = record.value(QStringLiteral("certificateId")).toString();
     const QString result = readableOutcome(record);
@@ -237,7 +240,8 @@ footer{margin-top:30px;border-top:1px solid #dae2ea;padding-top:18px;color:#596a
     html += QStringLiteral("<tr><th>Result</th><td>%1</td></tr>").arg(result.toHtmlEscaped());
     html += QStringLiteral("<tr><th>Verification</th><td>%1</td></tr>").arg(verification.toHtmlEscaped());
     html += QStringLiteral("</table><h2>Machine-learning analysis</h2><div class=\"notes\">%1</div>")
-        .arg(ml.isEmpty() ? QStringLiteral("ML analysis was not available for this operation.") : escLines(ml));
+        .arg(escLines(ml));
+    html += QStringLiteral("<p style=\"color:#53677e;font-size:12px\">Similarity measures feature similarity before and after wiping. Recoverability is an ML estimate, not a guarantee.</p>");
     if (!errors.isEmpty())
         html += QStringLiteral("<h2>Additional information</h2><div class=\"notes\">%1</div>").arg(escLines(errors));
     html += QStringLiteral(R"HTML(<footer>
