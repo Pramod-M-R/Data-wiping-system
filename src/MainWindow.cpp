@@ -1052,9 +1052,20 @@ QJsonObject MainWindow::buildAssistantContext()
 
         const QString certificateId = record.value(QStringLiteral("certificateId")).toString().trimmed();
         if (!certificateId.isEmpty() && certificateHistory.size() < 5) {
-            QJsonObject certificate = activityContext(record);
+            QJsonObject certificate;
+            certificate.insert(QStringLiteral("certificate_id"), certificateId.left(100));
+            certificate.insert(QStringLiteral("timestamp"), displayTimestamp(record));
+            certificate.insert(QStringLiteral("user"), record.value(QStringLiteral("user")).toString().left(80));
+            certificate.insert(QStringLiteral("file_name"), record.value(QStringLiteral("fileName")).toString().left(120));
+            certificate.insert(QStringLiteral("location"), conciseLocation(record).left(180));
+            certificate.insert(QStringLiteral("method"), readableMethod(record));
+            certificate.insert(QStringLiteral("status"), record.value(QStringLiteral("status")).toString());
+            certificate.insert(QStringLiteral("outcome"), readableOutcome(record));
+            certificate.insert(QStringLiteral("verification"), readableVerification(record));
+            certificate.insert(QStringLiteral("ml_summary"), mlTableSummary(record).left(120));
+            const QString pdfPath = record.value(QStringLiteral("certificatePath")).toString();
             certificate.insert(QStringLiteral("pdf_ready"),
-                certificate.value(QStringLiteral("certificate_available")).toBool());
+                !pdfPath.isEmpty() && QFileInfo(pdfPath).exists() && QFileInfo(pdfPath).size() > 0);
             certificateHistory.append(certificate);
         }
     }
@@ -1303,8 +1314,33 @@ void MainWindow::sendAssistantQuestion()
     m_assistantPendingRequestId = QUuid::createUuid().toString(QUuid::WithoutBraces);
     request.insert(QStringLiteral("request_id"), m_assistantPendingRequestId);
     request.insert(QStringLiteral("question"), question);
-    request.insert(QStringLiteral("context"), buildAssistantContext());
-    const QByteArray payload = QJsonDocument(request).toJson(QJsonDocument::Compact);
+    QJsonObject assistantContext = buildAssistantContext();
+    request.insert(QStringLiteral("context"), assistantContext);
+    QByteArray payload = QJsonDocument(request).toJson(QJsonDocument::Compact);
+
+    // Keep comfortably below the Python service's 20 KiB request limit. Newest
+    // entries are first, so trimming from the end preserves the latest operation.
+    auto trimContextArray = [&](const QString& key, int minimumItems) {
+        while (payload.size() > 16 * 1024) {
+            QJsonArray values = assistantContext.value(key).toArray();
+            if (values.size() <= minimumItems)
+                break;
+            values.removeAt(values.size() - 1);
+            assistantContext.insert(key, values);
+            request.insert(QStringLiteral("context"), assistantContext);
+            payload = QJsonDocument(request).toJson(QJsonDocument::Compact);
+        }
+    };
+    trimContextArray(QStringLiteral("scan_entries"), 1);
+    trimContextArray(QStringLiteral("certificate_records"), 1);
+    trimContextArray(QStringLiteral("devices"), 1);
+    trimContextArray(QStringLiteral("activity_records"), 1);
+
+    if (payload.size() > 18 * 1024) {
+        setAssistantBusy(false);
+        handleAssistantUnavailable(QStringLiteral("the current application context is too large to send safely"));
+        return;
+    }
 
     auto* process = new QProcess(this);
     m_assistantProcess = process;
