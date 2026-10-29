@@ -18,7 +18,7 @@ _PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
         r"\b(which|what)\s+(file|files|drive|drives|target|item|items)\b.{0,60}\b(did i|was|were|have i|have we)\b.{0,35}\b(wipe|wiped|erase|erased|delete|deleted)\b",
         r"\b(who|which user)\b.{0,60}\b(wiped|erased|deleted|performed)\b",
         r"\bwhat did i (just )?(wipe|erase|delete)\b",
-        r"\b(last|latest|recent|previous)\b.{0,40}\b(wipe|erasure|operation|file|activity|certificate)\b",
+        r"\b(last|latest|recent|previous)\b.{0,40}\b(wipe|wipes|erasure|erasures|operation|operations|file|files|activity|activities|certificate|certificates)\b",
         r"\b(activity log|wipe history|operation history|recent activity|my last wipe|last file i wiped|which files have i wiped)\b",
     )),
     ("destructive_request", (
