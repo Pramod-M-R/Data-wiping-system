@@ -42,6 +42,14 @@
           "type": "string",
           "maxLength": 120
         },
+        "settings": {
+          "type": "object",
+          "properties": {
+            "signed_in_user": { "type": "string", "maxLength": 120 },
+            "persistence": { "type": "string", "maxLength": 80 },
+            "application_name": { "type": "string", "maxLength": 80 }
+          }
+        },
         "device": {
           "type": "object"
         },
