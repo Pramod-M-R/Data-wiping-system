@@ -131,7 +131,8 @@ class AssistantTests(unittest.TestCase):
             },
         })
         self.assertIn("DG-CERT-7", response["answer"])
-        self.assertIn("does not", response["answer"].lower())
+        self.assertIn("application-reported details", response["answer"])
+        self.assertTrue(any("not a universal guarantee" in item for item in response["caveats"]))
 
     def test_whole_drive_goal_routes_to_guidance_not_execution(self):
         response = self.request("I want to erase the entire USB drive")
