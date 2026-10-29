@@ -782,7 +782,10 @@ QWidget* MainWindow::buildAssistantPage()
             "QPushButton{color:#eaf5ff;background:rgba(20,47,75,190);border:1px solid rgba(112,175,213,75);border-radius:8px;padding:7px 10px;text-align:left;} "
             "QPushButton:hover{background:rgba(29,83,119,220);} QPushButton:disabled{color:#8498ab;}"));
         connect(button, &QPushButton::clicked, this, [this, button]() {
-            if (m_assistantInput && m_assistantSendButton && m_assistantSendButton->isEnabled()) {
+            // Send is normally disabled while the input is empty, so don't
+            // use its enabled state as a prerequisite for clicking a prompt.
+            if (m_assistantInput &&
+                (!m_assistantProcess || m_assistantProcess->state() == QProcess::NotRunning)) {
                 m_assistantInput->setText(button->text());
                 sendAssistantQuestion();
             }
@@ -858,6 +861,8 @@ QJsonObject MainWindow::buildAssistantContext()
     if (screenIndex == 6) screenIndex = m_lastNonAssistantPageIndex;
     if (screenIndex < 0 || screenIndex >= screenNames.size()) screenIndex = 0;
     context.insert(QStringLiteral("screen"), screenNames.at(screenIndex));
+    if (!m_signedInUser.trimmed().isEmpty())
+        context.insert(QStringLiteral("signed_in_user"), m_signedInUser.trimmed().left(120));
     char selectedDriveLetter = 0;
 
     // Read-only device summary. Do not expose raw physical paths or serial numbers.
@@ -879,6 +884,25 @@ QJsonObject MainWindow::buildAssistantContext()
             context.insert(QStringLiteral("device"), device);
         }
     }
+
+    DeviceManager inventoryManager;
+    const auto allDrives = inventoryManager.listRemovableDrives();
+    QJsonArray deviceInventory;
+    for (size_t i = 0; i < allDrives.size() && deviceInventory.size() < 12; ++i) {
+        const auto& drive = allDrives[i];
+        QJsonObject item;
+        item.insert(QStringLiteral("display_name"),
+            QStringLiteral("USB Drive %1:").arg(QChar(drive.letter)));
+        const QString model = QString::fromStdString(drive.model).trimmed();
+        if (!model.isEmpty()) item.insert(QStringLiteral("model"), model.left(100));
+        item.insert(QStringLiteral("drive_letter"), QStringLiteral("%1:").arg(QChar(drive.letter)));
+        item.insert(QStringLiteral("capacity_bytes"), static_cast<double>(drive.sizeBytes));
+        item.insert(QStringLiteral("connected"), true);
+        item.insert(QStringLiteral("selected"), drive.letter == selectedDriveLetter);
+        deviceInventory.append(item);
+    }
+    if (!deviceInventory.isEmpty())
+        context.insert(QStringLiteral("devices"), deviceInventory);
 
     // A scan is current only if the selected physical device is the one scanned.
     const bool scanMatchesSelectedDevice =
@@ -914,6 +938,49 @@ QJsonObject MainWindow::buildAssistantContext()
         }
         scan.insert(QStringLiteral("limitations"), limitations);
         context.insert(QStringLiteral("scan_summary"), scan);
+
+        QJsonArray scanEntries;
+        const QString driveRoot = QStringLiteral("Drive %1:").arg(QChar(selectedDriveLetter));
+        std::function<void(QTreeWidgetItem*, const QString&)> collectScanEntries;
+        collectScanEntries = [&](QTreeWidgetItem* node, const QString& parentLocation) {
+            if (!node || scanEntries.size() >= 25) return;
+            const QString name = node->text(0).trimmed();
+            const QString itemStatus = node->text(2).trimmed();
+            QString location = parentLocation;
+            if (itemStatus == QStringLiteral("Drive Root")) {
+                location = driveRoot;
+            } else if (itemStatus == QStringLiteral("Recovered")) {
+                location = parentLocation + QStringLiteral(" > Deleted Files");
+            } else if (!name.isEmpty()) {
+                location = parentLocation.isEmpty() ? name
+                    : parentLocation + QStringLiteral(" > ") + name;
+            }
+
+            if (!name.isEmpty() &&
+                itemStatus != QStringLiteral("Drive Root") &&
+                itemStatus != QStringLiteral("Recovered") &&
+                scanEntries.size() < 25) {
+                QJsonObject entry;
+                entry.insert(QStringLiteral("file_name"), name.left(160));
+                entry.insert(QStringLiteral("location"), location.left(240));
+                entry.insert(QStringLiteral("status"), itemStatus.left(40));
+                const QString sizeDisplay = node->text(1).trimmed();
+                if (!sizeDisplay.isEmpty())
+                    entry.insert(QStringLiteral("size_display"), sizeDisplay.left(40));
+                const QString modified = node->text(3).trimmed();
+                if (!modified.isEmpty() && modified != QStringLiteral("—"))
+                    entry.insert(QStringLiteral("modified"), modified.left(80));
+                if (itemStatus == QStringLiteral("DELETED"))
+                    entry.insert(QStringLiteral("is_deleted"), true);
+                scanEntries.append(entry);
+            }
+            for (int child = 0; child < node->childCount() && scanEntries.size() < 25; ++child)
+                collectScanEntries(node->child(child), location);
+        };
+        for (int top = 0; top < fileTree->topLevelItemCount() && scanEntries.size() < 25; ++top)
+            collectScanEntries(fileTree->topLevelItem(top), QString());
+        if (!scanEntries.isEmpty())
+            context.insert(QStringLiteral("scan_entries"), scanEntries);
     }
 
     std::vector<FileToWipe> selected;
@@ -945,24 +1012,53 @@ QJsonObject MainWindow::buildAssistantContext()
     }
 
     const QJsonArray records = readAuditRecords();
-    QJsonObject latest;
-    if (!records.isEmpty() && records.last().isObject()) latest = records.last().toObject();
-    if (!latest.isEmpty()) {
-        QJsonObject operation;
-        operation.insert(QStringLiteral("timestamp"), latest.value(QStringLiteral("timestamp")).toString());
-        operation.insert(QStringLiteral("file_name"), latest.value(QStringLiteral("fileName")).toString());
-        operation.insert(QStringLiteral("source"), latest.value(QStringLiteral("source")).toString());
-        operation.insert(QStringLiteral("method"), latest.value(QStringLiteral("method")).toString());
-        operation.insert(QStringLiteral("status"), latest.value(QStringLiteral("status")).toString());
-        operation.insert(QStringLiteral("verification"), latest.value(QStringLiteral("verification")).toString());
-        operation.insert(QStringLiteral("error_message"), latest.value(QStringLiteral("errorMessage")).toString().left(320));
-        operation.insert(QStringLiteral("ml_summary"), mlTableSummary(latest).left(800));
-        operation.insert(QStringLiteral("certificate_id"), latest.value(QStringLiteral("certificateId")).toString());
-        bool bytesOk = false;
-        const qulonglong bytes = latest.value(QStringLiteral("bytesWiped")).toString().toULongLong(&bytesOk);
-        if (bytesOk) operation.insert(QStringLiteral("bytes_wiped"), static_cast<double>(bytes));
-        context.insert(QStringLiteral("last_recorded_operation"), operation);
+    QJsonArray activityHistory;
+    QJsonArray certificateHistory;
+
+    auto activityContext = [this](const QJsonObject& record) {
+        QJsonObject item;
+        item.insert(QStringLiteral("timestamp"), displayTimestamp(record));
+        item.insert(QStringLiteral("user"), record.value(QStringLiteral("user")).toString().left(100));
+        item.insert(QStringLiteral("file_name"), record.value(QStringLiteral("fileName")).toString().left(160));
+        item.insert(QStringLiteral("location"), conciseLocation(record).left(220));
+        item.insert(QStringLiteral("method"), readableMethod(record));
+        item.insert(QStringLiteral("status"), record.value(QStringLiteral("status")).toString());
+        item.insert(QStringLiteral("outcome"), readableOutcome(record));
+        item.insert(QStringLiteral("verification"), readableVerification(record));
+        item.insert(QStringLiteral("ml_summary"), mlTableSummary(record).left(240));
+        item.insert(QStringLiteral("error_message"), record.value(QStringLiteral("errorMessage")).toString().left(180));
+        item.insert(QStringLiteral("certificate_id"), record.value(QStringLiteral("certificateId")).toString().left(100));
+        bool passOk = false;
+        const int passes = record.value(QStringLiteral("passes")).toString().toInt(&passOk);
+        if (passOk) item.insert(QStringLiteral("passes"), passes);
+        const QString pdfPath = record.value(QStringLiteral("certificatePath")).toString();
+        item.insert(QStringLiteral("certificate_available"),
+            !pdfPath.isEmpty() && QFileInfo(pdfPath).exists() && QFileInfo(pdfPath).size() > 0);
+        return item;
+    };
+
+    // Newest records first. This gives the assistant an audit-history window,
+    // instead of requiring the user to manually restate the last operation.
+    for (int i = records.size() - 1; i >= 0 && activityHistory.size() < 12; --i) {
+        if (!records.at(i).isObject()) continue;
+        const QJsonObject record = records.at(i).toObject();
+        activityHistory.append(activityContext(record));
+
+        const QString certificateId = record.value(QStringLiteral("certificateId")).toString().trimmed();
+        if (!certificateId.isEmpty() && certificateHistory.size() < 8) {
+            QJsonObject certificate = activityContext(record);
+            certificate.insert(QStringLiteral("pdf_ready"),
+                certificate.value(QStringLiteral("certificate_available")).toBool());
+            certificateHistory.append(certificate);
+        }
     }
+    if (!activityHistory.isEmpty()) {
+        context.insert(QStringLiteral("activity_records"), activityHistory);
+        // The first activity record is the newest actual audit record.
+        context.insert(QStringLiteral("last_recorded_operation"), activityHistory.first().toObject());
+    }
+    if (!certificateHistory.isEmpty())
+        context.insert(QStringLiteral("certificate_records"), certificateHistory);
 
     QString selectedCertificateId;
     if (screenIndex == 5 && m_certificatesTable &&
@@ -987,8 +1083,12 @@ QJsonObject MainWindow::buildAssistantContext()
             certificate.insert(QStringLiteral("location"), conciseLocation(record));
             certificate.insert(QStringLiteral("method"), readableMethod(record));
             certificate.insert(QStringLiteral("status"), record.value(QStringLiteral("status")).toString());
-            certificate.insert(QStringLiteral("verification"), record.value(QStringLiteral("verification")).toString());
-            certificate.insert(QStringLiteral("ml_summary"), mlTableSummary(record).left(800));
+            certificate.insert(QStringLiteral("outcome"), readableOutcome(record));
+            certificate.insert(QStringLiteral("verification"), readableVerification(record));
+            certificate.insert(QStringLiteral("ml_summary"), mlTableSummary(record).left(240));
+            const QString pdfPath = record.value(QStringLiteral("certificatePath")).toString();
+            certificate.insert(QStringLiteral("pdf_ready"),
+                !pdfPath.isEmpty() && QFileInfo(pdfPath).exists() && QFileInfo(pdfPath).size() > 0);
             bool passesOk = false;
             const int passes = record.value(QStringLiteral("passes")).toString().toInt(&passesOk);
             if (passesOk) certificate.insert(QStringLiteral("passes"), passes);
