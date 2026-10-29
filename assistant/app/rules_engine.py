@@ -250,6 +250,13 @@ def answer_question(
                 navigation=[_nav("Open Devices", "devices")],
             )
         if not isinstance(device, dict) or not device:
+            inventory = context.get("devices", [])
+            if isinstance(inventory, list) and inventory:
+                return _result(
+                    "DataGuard currently reports " + str(len(inventory)) + " removable device(s). Ask me to list connected devices, or open Devices to select one for more specific details.",
+                    "device_inventory",
+                    navigation=[_nav("Open Devices", "devices")],
+                )
             return _result(
                 "No selected-device details are available in the current application context. Open Devices, refresh the device list, and select the intended drive. I won't assume a device is connected from an earlier message.",
                 "device_information",
@@ -344,6 +351,11 @@ def answer_question(
             navigation=[_nav("Review Scan Results", "scan_results")],
         )
 
+    if intent in {"ml_explanation", "verification", "operation_status"}:
+        relevant_operation = _pick_relevant_record(question, _activity_records(context))
+        if relevant_operation:
+            operation = relevant_operation
+
     if intent == "ml_explanation":
         summary = operation.get("ml_summary", "")
         if not summary:
@@ -395,8 +407,34 @@ def answer_question(
 
     if intent == "certificate":
         if not isinstance(certificate, dict) or not certificate:
+            available = context.get("certificate_records", [])
+            if isinstance(available, list) and available:
+                lines = []
+                for item in available[:6]:
+                    if not isinstance(item, dict):
+                        continue
+                    certificate_id = str(item.get("certificate_id", "")).strip()
+                    file_name = str(item.get("file_name", "")).strip()
+                    timestamp = str(item.get("timestamp", "")).strip()
+                    outcome = str(item.get("outcome", item.get("status", ""))).strip()
+                    pdf_ready = item.get("pdf_ready") is True
+                    line = certificate_id or "Certificate ID not recorded"
+                    if file_name:
+                        line += f" — {file_name}"
+                    if timestamp:
+                        line += f" — {timestamp}"
+                    if outcome:
+                        line += f" — {outcome}"
+                    line += " — PDF ready" if pdf_ready else " — PDF unavailable or not verified"
+                    lines.append(line)
+                return _result(
+                    "Recent certificate records supplied by DataGuard, newest first:\\n" + "\\n".join(f"• {line}" for line in lines),
+                    "certificate_list",
+                    caveats=["Select a row in Certificates to ask for that certificate's full recorded details."],
+                    navigation=[_nav("Open Certificates", "certificates")],
+                )
             return _result(
-                "No specific certificate is selected in the current context. Open Certificates, select the certificate you want to inspect, and open its PDF. I can't claim that a certificate exists unless the application supplies its record.",
+                "No certificate records are available in the current application context. Open Certificates and refresh the list; I won't assume a certificate exists without a saved record.",
                 "certificate_guidance",
                 navigation=[_nav("Open Certificates", "certificates")],
                 requires_action=True,
