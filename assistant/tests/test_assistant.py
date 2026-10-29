@@ -16,7 +16,6 @@ from context_builder import build_context
 from controller import RequestError, handle_request
 from intents import classify_intent
 from response_validator import validate_response
-from intents import classify_intent
 
 
 class AssistantTests(unittest.TestCase):
@@ -154,6 +153,99 @@ class AssistantTests(unittest.TestCase):
 
     def test_certificate_intent_precedes_generic_verification_intent(self):
         self.assertEqual(classify_intent("What does my certificate prove?"), "certificate")
+
+    def test_history_question_uses_latest_activity_record(self):
+        response = self.request("Which file did I just wipe?", {
+            "screen": "assistant",
+            "activity_records": [
+                {
+                    "timestamp": "30 Oct 2026, 03:40:00 AM IST",
+                    "user": "fixture-user",
+                    "file_name": "new_report.pdf",
+                    "location": "Drive E: > Deleted Files > new_report.pdf",
+                    "method": "Three passes (DoD)",
+                    "status": "SUCCESS",
+                    "outcome": "Wiped successfully (verified)",
+                    "verification": "Verification successful",
+                    "certificate_id": "DG-HISTORY-001",
+                },
+                {
+                    "file_name": "older.bin",
+                    "location": "Drive E: > Deleted Files > older.bin",
+                    "method": "Single pass (zero fill)",
+                    "status": "SUCCESS",
+                    "outcome": "Wiped successfully",
+                    "timestamp": "29 Oct 2026, 10:00:00 PM IST",
+                },
+            ],
+        })
+        self.assertEqual(response["answer_type"], "history_lookup")
+        self.assertIn("new_report.pdf", response["answer"])
+        self.assertIn("Wiped successfully (verified)", response["answer"])
+        self.assertIn("DG-HISTORY-001", response["answer"])
+        self.assertNotIn("older.bin", response["answer"])
+
+    def test_history_question_can_match_a_named_file(self):
+        response = self.request("What was the result for older.bin?", {
+            "activity_records": [
+                {"file_name": "new_report.pdf", "outcome": "Wiped successfully"},
+                {"file_name": "older.bin", "outcome": "Wipe failed / not completed",
+                 "error_message": "No physical extents were found."},
+            ],
+        })
+        self.assertEqual(response["answer_type"], "operation_status")
+        self.assertIn("older.bin", response["answer"])
+        self.assertIn("No physical extents", response["answer"])
+
+    def test_scan_question_lists_actual_scan_entries(self):
+        response = self.request("What files did the scan find?", {
+            "scan_summary": {"existing_entries": 2, "potentially_deleted_entries": 1, "scan_status": "completed"},
+            "scan_entries": [
+                {"file_name": "notes.txt", "location": "Drive E: > Documents > notes.txt", "status": "Existing"},
+                {"file_name": "deleted_photo.jpg", "location": "Drive E: > Deleted Files > deleted_photo.jpg", "status": "DELETED", "is_deleted": True},
+            ],
+        })
+        self.assertEqual(response["answer_type"], "scan_explanation")
+        self.assertIn("notes.txt", response["answer"])
+        self.assertIn("deleted_photo.jpg", response["answer"])
+
+    def test_device_question_can_list_inventory(self):
+        response = self.request("How many devices are connected?", {
+            "devices": [
+                {"display_name": "USB Drive E:", "drive_letter": "E:", "capacity_bytes": 16000000000, "connected": True},
+                {"display_name": "USB Drive F:", "drive_letter": "F:", "capacity_bytes": 32000000000, "connected": True},
+            ],
+        })
+        self.assertEqual(response["answer_type"], "device_inventory")
+        self.assertIn("USB Drive E:", response["answer"])
+        self.assertIn("USB Drive F:", response["answer"])
+
+    def test_certificate_question_lists_recent_certificates_when_none_selected(self):
+        response = self.request("Show my certificates", {
+            "certificate_records": [
+                {"certificate_id": "DG-C1", "file_name": "sample1.txt", "outcome": "Wiped successfully", "pdf_ready": True},
+                {"certificate_id": "DG-C2", "file_name": "sample2.txt", "outcome": "Wipe failed", "pdf_ready": False},
+            ],
+        })
+        self.assertEqual(response["answer_type"], "certificate_list")
+        self.assertIn("DG-C1", response["answer"])
+        self.assertIn("sample2.txt", response["answer"])
+
+    def test_extended_context_keeps_recent_records_and_scan_entries(self):
+        clean = build_context({
+            "screen": "assistant",
+            "activity_records": [{"file_name": "recent.txt", "outcome": "Wiped successfully", "raw_data": "do not pass"}],
+            "certificate_records": [{"certificate_id": "DG-1", "pdf_ready": True}],
+            "scan_entries": [{"file_name": "visible.txt", "location": "Drive E: > visible.txt", "status": "Existing"}],
+            "devices": [{"display_name": "USB E:", "serial_number": "private-serial"}],
+        })
+        encoded = json.dumps(clean)
+        self.assertIn("recent.txt", encoded)
+        self.assertIn("DG-1", encoded)
+        self.assertIn("visible.txt", encoded)
+        self.assertNotIn("do not pass", encoded)
+        self.assertNotIn("private-serial", encoded)
+        self.assertNotIn("serial_number", encoded)
 
     def test_process_protocol_emits_single_json_response(self):
         payload = json.dumps({
