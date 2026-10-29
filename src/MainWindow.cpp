@@ -92,12 +92,23 @@ QString istTimestampNow()
     return QDateTime::currentDateTimeUtc().toTimeZone(ist)
         .toString(QStringLiteral("dd MMM yyyy, hh:mm:ss AP 'IST'"));
 }
+QString displayTimestamp(const QJsonObject& record)
+{
+    const QString raw = record.value(QStringLiteral("timestamp")).toString().trimmed();
+    if (raw.endsWith(QStringLiteral("IST"))) return raw;
+    QDateTime parsed = QDateTime::fromString(raw, Qt::ISODateWithMs);
+    if (!parsed.isValid()) parsed = QDateTime::fromString(raw, Qt::ISODate);
+    if (!parsed.isValid()) return raw.isEmpty() ? QStringLiteral("Time not recorded") : raw;
+    const QTimeZone ist(QByteArrayLiteral("Asia/Kolkata"));
+    if (parsed.timeSpec() == Qt::LocalTime) parsed = parsed.toUTC();
+    return parsed.toTimeZone(ist).toString(QStringLiteral("dd MMM yyyy, hh:mm:ss AP 'IST'"));
+}
 QString readableOutcome(const QJsonObject& record)
 {
     if (record.value(QStringLiteral("status")).toString() != QStringLiteral("SUCCESS"))
-        return QStringLiteral("Wipe failed");
+        return QStringLiteral("Wipe failed / not completed");
     if (record.value(QStringLiteral("verification")).toString().startsWith(QStringLiteral("PASSED")))
-        return QStringLiteral("Wiped successfully — verification passed");
+        return QStringLiteral("Wiped successfully (verified)");
     return QStringLiteral("Wiped successfully");
 }
 QString readableVerification(const QJsonObject& record)
@@ -112,9 +123,9 @@ QString readableVerification(const QJsonObject& record)
 QString readableMethod(const QJsonObject& record)
 {
     const int passes = record.value(QStringLiteral("passes")).toString().toInt();
-    if (passes == 1) return QStringLiteral("Single pass (zeros)");
-    if (passes == 3) return QStringLiteral("DoD 3-pass");
-    if (passes == 7) return QStringLiteral("DoD 7-pass");
+    if (passes == 1) return QStringLiteral("Single pass (zero fill)");
+    if (passes == 3) return QStringLiteral("Three passes (DoD)");
+    if (passes == 7) return QStringLiteral("Seven passes (DoD)");
     const QString method = record.value(QStringLiteral("method")).toString();
     return method.isEmpty() ? QStringLiteral("Not recorded") : method;
 }
@@ -122,19 +133,57 @@ QString mlTableSummary(const QJsonObject& record)
 {
     const QString raw = record.value(QStringLiteral("mlResults")).toString().trimmed();
     if (raw.isEmpty()) return QStringLiteral("ML analysis not available");
-    QStringList lines = raw.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+    const QStringList lines = raw.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
     QStringList clean;
-    for (QString line : lines) {
-        line = line.trimmed();
-        if (!line.isEmpty()) clean << line;
+    for (const QString& sourceLine : lines) {
+        const QString line = sourceLine.trimmed();
+        const QString lower = line.toLower();
+        if (lower.startsWith(QStringLiteral("similarity score")) ||
+            lower.startsWith(QStringLiteral("recoverability score")) ||
+            lower.startsWith(QStringLiteral("recoverability risk")) ||
+            lower.startsWith(QStringLiteral("risk level")) ||
+            lower.startsWith(QStringLiteral("recommended next wipe method")) ||
+            lower.startsWith(QStringLiteral("recommendation:")))
+            clean << line;
     }
-    return clean.join(QStringLiteral("\n"));
+    return clean.isEmpty() ? QStringLiteral("ML analysis details available on hover") : clean.join(QStringLiteral("\n"));
 }
 QString conciseLocation(const QJsonObject& record)
 {
-    const QString path = record.value(QStringLiteral("filePath")).toString().trimmed();
-    return path.isEmpty() ? QStringLiteral("Location not recorded") : path;
+    const QString raw = record.value(QStringLiteral("filePath")).toString().trimmed();
+    if (raw.isEmpty()) return QStringLiteral("Location not recorded");
+    const QString fileName = record.value(QStringLiteral("fileName")).toString().trimmed();
+    const QString source = record.value(QStringLiteral("source")).toString();
+    QString drive = record.value(QStringLiteral("driveLetter")).toString().trimmed();
+    drive.remove(QLatin1Char(':'));
+    if (source.contains(QStringLiteral("Deleted Files"), Qt::CaseInsensitive) ||
+        raw.contains(QStringLiteral("Deleted Files section"), Qt::CaseInsensitive)) {
+        if (drive.isEmpty()) {
+            const int marker = raw.indexOf(QStringLiteral("drive "), 0, Qt::CaseInsensitive);
+            if (marker >= 0 && marker + 6 < raw.size()) drive = raw.mid(marker + 6, 1);
+        }
+        return drive.isEmpty() ? QStringLiteral("Deleted Files > %1").arg(fileName)
+            : QStringLiteral("Drive %1: > Deleted Files > %2").arg(drive, fileName);
+    }
+    QString cleaned = raw;
+    const int scanner = cleaned.indexOf(QStringLiteral("; scanner path:"), 0, Qt::CaseInsensitive);
+    if (scanner >= 0) cleaned.truncate(scanner);
+    const int physical = cleaned.indexOf(QStringLiteral("; physical extents:"), 0, Qt::CaseInsensitive);
+    if (physical >= 0) cleaned.truncate(physical);
+    cleaned = cleaned.trimmed();
+    if (cleaned.contains(QStringLiteral(":\\"))) {
+        QString p = QDir::fromNativeSeparators(cleaned);
+        const QString driveLetter = p.left(1).toUpper();
+        p = p.mid(3);
+        p.replace(QLatin1Char('/'), QLatin1Char('>'));
+        QStringList parts = p.split(QLatin1Char('>'), Qt::SkipEmptyParts);
+        for (QString& part : parts) part = part.trimmed();
+        return QStringLiteral("Drive %1:").arg(driveLetter) +
+            (parts.isEmpty() ? QString() : QStringLiteral(" > ") + parts.join(QStringLiteral(" > ")));
+    }
+    return cleaned;
 }
+
 
 QString certificateHtml(const QJsonObject& record)
 {
@@ -176,10 +225,11 @@ footer{margin-top:30px;border-top:1px solid #dae2ea;padding-top:18px;color:#596a
     html += QStringLiteral("<div class=\"id\"><strong>Certificate ID:</strong> %1</div>").arg(id.toHtmlEscaped());
     html += QStringLiteral("<h2>Who and when</h2><table>");
     html += field(QStringLiteral("Signed-in user"), QStringLiteral("user"));
-    html += field(QStringLiteral("Date and time (Indian Standard Time)"), QStringLiteral("timestamp"));
+    html += QStringLiteral("<tr><th>Date and time (Indian Standard Time)</th><td>%1</td></tr>")
+        .arg(displayTimestamp(record).toHtmlEscaped());
     html += QStringLiteral("</table><h2>What was wiped</h2><table>");
     html += field(QStringLiteral("File or drive"), QStringLiteral("fileName"));
-    html += field(QStringLiteral("Location"), QStringLiteral("filePath"));
+    html += QStringLiteral("<tr><th>Location</th><td>%1</td></tr>").arg(conciseLocation(record).toHtmlEscaped());
     html += QStringLiteral("</table><h2>Wipe details</h2><table>");
     html += QStringLiteral("<tr><th>Method used</th><td>%1</td></tr>").arg(method.toHtmlEscaped());
     html += QStringLiteral("<tr><th>Number of passes</th><td>%1</td></tr>")
@@ -188,9 +238,8 @@ footer{margin-top:30px;border-top:1px solid #dae2ea;padding-top:18px;color:#596a
     html += QStringLiteral("<tr><th>Verification</th><td>%1</td></tr>").arg(verification.toHtmlEscaped());
     html += QStringLiteral("</table><h2>Machine-learning analysis</h2><div class=\"notes\">%1</div>")
         .arg(ml.isEmpty() ? QStringLiteral("ML analysis was not available for this operation.") : escLines(ml));
-    if (!errors.isEmpty()) {
+    if (!errors.isEmpty())
         html += QStringLiteral("<h2>Additional information</h2><div class=\"notes\">%1</div>").arg(escLines(errors));
-    }
     html += QStringLiteral(R"HTML(<footer>
 This certificate summarizes the result reported by the local DataGuard application. ML scores are model estimates, not guarantees of data recovery or permanent erasure. Keep the certificate together with the application activity log for audit purposes.
 </footer></main></body></html>)HTML");
@@ -203,7 +252,7 @@ void styleAuditTable(QTableWidget* table)
     table->setEditTriggers(QAbstractItemView::NoEditTriggers);
     table->setSelectionBehavior(QAbstractItemView::SelectRows);
     table->setSelectionMode(QAbstractItemView::SingleSelection);
-    table->setWordWrap(true);
+    table->setWordWrap(false);
     table->setTextElideMode(Qt::ElideRight);
     table->verticalHeader()->setVisible(false);
     table->verticalHeader()->setDefaultSectionSize(42);
@@ -217,7 +266,6 @@ void styleAuditTable(QTableWidget* table)
         "QTableCornerButton::section { background:#192d45; border:0; }"));
 }
 
-
 QString auditPathForFile(const FileToWipe& file, char driveLetter)
 {
     if (!file.fullPath.empty())
@@ -228,7 +276,6 @@ QString auditPathForFile(const FileToWipe& file, char driveLetter)
     return QStringLiteral("Drive %1: > %2")
         .arg(QChar(driveLetter)).arg(QString::fromStdString(file.name));
 }
-
 
 int passesForMethod(int methodIndex)
 {
@@ -368,7 +415,7 @@ QWidget* MainWindow::buildActivityLogPage()
     styleAuditTable(m_activityTable);
     auto* header = m_activityTable->horizontalHeader();
     header->setSectionResizeMode(QHeaderView::Interactive);
-    const int widths[] = {156,112,150,200,125,185,230,170};
+    const int widths[] = {150,105,135,170,120,165,210,155};
     for (int i=0; i<8; ++i) m_activityTable->setColumnWidth(i,widths[i]);
     m_activityTable->setMinimumHeight(340);
     connect(m_activityTable, &QTableWidget::cellDoubleClicked, this, [this](int row, int) {
@@ -381,7 +428,6 @@ QWidget* MainWindow::buildActivityLogPage()
     layout->addWidget(card, 1);
     return scrollPage(content);
 }
-
 
 QWidget* MainWindow::buildCertificatesPage()
 {
@@ -426,7 +472,7 @@ QWidget* MainWindow::buildCertificatesPage()
     styleAuditTable(m_certificatesTable);
     auto* header = m_certificatesTable->horizontalHeader();
     header->setSectionResizeMode(QHeaderView::Interactive);
-    const int widths[] = {156,112,150,200,125,185,230,170};
+    const int widths[] = {150,105,135,170,120,165,210,155};
     for (int i=0; i<8; ++i) m_certificatesTable->setColumnWidth(i,widths[i]);
     m_certificatesTable->setMinimumHeight(340);
     connect(m_certificatesTable, &QTableWidget::cellDoubleClicked, this, [this](int row, int) {
@@ -440,7 +486,6 @@ QWidget* MainWindow::buildCertificatesPage()
     return scrollPage(content);
 }
 
-
 void MainWindow::refreshActivityLog()
 {
     if (!m_activityTable) return;
@@ -452,7 +497,7 @@ void MainWindow::refreshActivityLog()
         const QString certPath = r.value(QStringLiteral("certificatePath")).toString();
         const QString error = r.value(QStringLiteral("errorMessage")).toString();
         const QStringList values = {
-            r.value(QStringLiteral("timestamp")).toString(),
+            displayTimestamp(r),
             r.value(QStringLiteral("user")).toString(),
             r.value(QStringLiteral("fileName")).toString(),
             conciseLocation(r),
@@ -476,9 +521,7 @@ void MainWindow::refreshActivityLog()
         const QString rawMl = r.value(QStringLiteral("mlResults")).toString();
         if (!rawMl.isEmpty()) m_activityTable->item(row, 6)->setToolTip(rawMl);
     }
-    m_activityTable->resizeRowsToContents();
 }
-
 
 void MainWindow::refreshCertificates()
 {
@@ -491,7 +534,7 @@ void MainWindow::refreshCertificates()
         const QString certPath = r.value(QStringLiteral("certificatePath")).toString();
         const QString error = r.value(QStringLiteral("errorMessage")).toString();
         const QStringList values = {
-            r.value(QStringLiteral("timestamp")).toString(),
+            displayTimestamp(r),
             r.value(QStringLiteral("user")).toString(),
             r.value(QStringLiteral("fileName")).toString(),
             conciseLocation(r),
@@ -515,9 +558,7 @@ void MainWindow::refreshCertificates()
         const QString rawMl = r.value(QStringLiteral("mlResults")).toString();
         if (!rawMl.isEmpty()) m_certificatesTable->item(row, 6)->setToolTip(rawMl);
     }
-    m_certificatesTable->resizeRowsToContents();
 }
-
 
 void MainWindow::recordWipeActivity(const QString& fileName, const QString& filePath,
                                     const QString& source, const QString& driveLetter,
@@ -790,6 +831,22 @@ void MainWindow::collectSelectedFiles(QTreeWidgetItem* item,
             f.name = child->text(0).toStdString();
             f.isDeleted = (child->text(2) == "DELETED");
             f.isDirectory = (child->text(2) == "Folder");
+            if (f.isDeleted) {
+                f.fullPath = QStringLiteral("Drive %1: > Deleted Files > %2")
+                    .arg(QChar(currentDriveLetter)).arg(child->text(0)).toStdString();
+            } else {
+                QStringList pathParts;
+                QTreeWidgetItem* pathNode = child;
+                while (pathNode) {
+                    const QString part = pathNode->text(0).trimmed();
+                    if (pathNode->text(2) == QStringLiteral("Drive Root")) break;
+                    if (!part.isEmpty() && part != QStringLiteral("Deleted Files")) pathParts.prepend(part);
+                    pathNode = pathNode->parent();
+                }
+                QString logicalPath = QStringLiteral("Drive %1:").arg(QChar(currentDriveLetter));
+                if (!pathParts.isEmpty()) logicalPath += QStringLiteral(" > ") + pathParts.join(QStringLiteral(" > "));
+                f.fullPath = logicalPath.toStdString();
+            }
             if (f.isDeleted) {
                 f.fullPath = QStringLiteral("Drive %1: > Deleted Files > %2")
                     .arg(QChar(currentDriveLetter)).arg(child->text(0)).toStdString();
@@ -1322,8 +1379,8 @@ if (!afterRead.success) {
     if (recoverabilityScoreGenerated) {
         const QString risk = riskLevel == 0 ? QStringLiteral("Low")
             : (riskLevel == 1 ? QStringLiteral("Medium") : QStringLiteral("High"));
-        const QString nextMethod = riskLevel == 0 ? QStringLiteral("Single pass (zeros)")
-            : (riskLevel == 1 ? QStringLiteral("DoD 3-pass") : QStringLiteral("DoD 7-pass"));
+        const QString nextMethod = riskLevel == 0 ? QStringLiteral("Single pass (zero fill)")
+            : (riskLevel == 1 ? QStringLiteral("Three passes (DoD)") : QStringLiteral("Seven passes (DoD)"));
         details << QStringLiteral("Recoverability score: %1%")
             .arg(recoverabilityScore * 100.0, 0, 'f', 2);
         details << QStringLiteral("Recoverability risk: %1").arg(risk);
