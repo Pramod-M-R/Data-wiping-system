@@ -33,3 +33,11 @@ add_executable(WipeEngine WIN32
 )
 
 target_link_libraries(WipeEngine PRIVATE Qt6::Widgets Qt6::Sql bcrypt)
+
+# Sync the local Python assistant into the runtime folder on every build.
+add_custom_target(copy_assistant_runtime ALL
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_SOURCE_DIR}/assistant" "${CMAKE_BINARY_DIR}/assistant"
+    COMMENT "Copying DataGuard assistant runtime"
+)
+add_dependencies(WipeEngine copy_assistant_runtime)
