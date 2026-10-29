@@ -7,6 +7,7 @@
 #include <ctime>
 #include <algorithm>
 #include <unordered_set>
+#include <limits>
 // ─── Helpers ───────────────────────────────────────────────
 
 static std::string filetimeToString(FILETIME ft) {
@@ -551,10 +552,117 @@ if (entry.sizeBytes == 0) {
 }
 
 if (!chainValid) {
-    entry.isValid = false;
+    // A deleted FAT32 directory entry often retains file size and start cluster,
+    // while the FAT chain is cleared by the filesystem. Only infer a contiguous
+    // extent if every candidate cluster is inside the data region and FREE in
+    // every FAT copy. If any candidate is allocated or metadata is ambiguous,
+    // leave the file unavailable rather than risking an active file.
     entry.clusterChain.clear();
     entry.extents.clear();
     entry.dataOffset = 0;
+    entry.isValid = false;
+
+    bool contiguousCandidate = entry.sizeBytes > 0 &&
+        startCluster >= 2 &&
+        startCluster <= maxDataCluster &&
+        expectedClusterCount > 0 &&
+        expectedClusterCount <= maxClusterVisits &&
+        expectedClusterCount <= maxDataCluster - startCluster + 1;
+
+    if (contiguousCandidate) {
+        const uint64_t candidateOffset =
+            dataStart + static_cast<uint64_t>(startCluster - 2) * clusterSize;
+        const uint64_t volumeBytes = totalSectors * bytesPerSector;
+        contiguousCandidate = candidateOffset <= volumeBytes &&
+            entry.sizeBytes <= volumeBytes - candidateOffset &&
+            expectedClusterCount * clusterSize >= entry.sizeBytes;
+        
+        bool allCandidateClustersFree = contiguousCandidate;
+        for (uint8_t fatCopy = 0;
+             allCandidateClustersFree && fatCopy < numFATs;
+             ++fatCopy) {
+            const uint64_t currentFatStart =
+                fatStart + static_cast<uint64_t>(fatCopy) * fatSizeBytes;
+            const uint64_t currentFatEnd = currentFatStart + fatSizeBytes;
+            uint64_t cachedSectorOffset = std::numeric_limits<uint64_t>::max();
+            std::vector<uint8_t> fatSector(bytesPerSector);
+
+            for (uint64_t clusterIndex = 0;
+                 clusterIndex < expectedClusterCount;
+                 ++clusterIndex) {
+                const uint64_t candidateCluster =
+                    static_cast<uint64_t>(startCluster) + clusterIndex;
+                const uint64_t fatEntryRelative = candidateCluster * sizeof(uint32_t);
+                if (candidateCluster > maxDataCluster ||
+                    fatEntryRelative > fatSizeBytes - sizeof(uint32_t)) {
+                    allCandidateClustersFree = false;
+                    break;
+                }
+
+                const uint64_t fatEntryOffset = currentFatStart + fatEntryRelative;
+                const uint64_t sectorOffset =
+                    (fatEntryOffset / bytesPerSector) * bytesPerSector;
+                const uint64_t offsetInSector = fatEntryOffset - sectorOffset;
+
+                if (sectorOffset < currentFatStart ||
+                    sectorOffset > currentFatEnd - bytesPerSector ||
+                    offsetInSector > bytesPerSector - sizeof(uint32_t)) {
+                    allCandidateClustersFree = false;
+                    break;
+                }
+
+                if (sectorOffset != cachedSectorOffset) {
+                    LARGE_INTEGER fatPosition;
+                    fatPosition.QuadPart = static_cast<LONGLONG>(sectorOffset);
+                    DWORD fatBytesRead = 0;
+                    if (!SetFilePointerEx(hDrive, fatPosition, NULL, FILE_BEGIN) ||
+                        !ReadFile(hDrive, fatSector.data(), bytesPerSector,
+                                  &fatBytesRead, NULL) ||
+                        fatBytesRead != bytesPerSector) {
+                        allCandidateClustersFree = false;
+                        break;
+                    }
+                    cachedSectorOffset = sectorOffset;
+                }
+
+                uint32_t fatValue = 0;
+                memcpy(&fatValue, fatSector.data() + offsetInSector, sizeof(fatValue));
+                fatValue &= 0x0FFFFFFF;
+                if (fatValue != 0) {
+                    allCandidateClustersFree = false;
+                    break;
+                }
+            }
+        }
+
+        if (allCandidateClustersFree) {
+            uint64_t remainingBytes = entry.sizeBytes;
+            for (uint64_t clusterIndex = 0;
+                 clusterIndex < expectedClusterCount;
+                 ++clusterIndex) {
+                const uint32_t candidateCluster =
+                    static_cast<uint32_t>(static_cast<uint64_t>(startCluster) + clusterIndex);
+                const uint64_t extentOffset =
+                    dataStart + static_cast<uint64_t>(candidateCluster - 2) * clusterSize;
+                const uint64_t extentLength =
+                    std::min<uint64_t>(clusterSize, remainingBytes);
+                entry.clusterChain.push_back(candidateCluster);
+                entry.extents.push_back({extentOffset, extentLength});
+                remainingBytes -= extentLength;
+            }
+
+            if (remainingBytes == 0) {
+                entry.dataOffset = candidateOffset;
+                entry.isValid = true;
+                entry.extentMappingInferred = true;
+            } else {
+                entry.clusterChain.clear();
+                entry.extents.clear();
+                entry.dataOffset = 0;
+                entry.isValid = false;
+            }
+        }
+    }
 }
 
 results.push_back(entry);
