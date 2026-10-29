@@ -6,7 +6,7 @@ import re
 _PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
     # Resolve certificate-specific questions before the broader "prove/verification" intent.
     ("certificate", (
-        r"\b(certificate|pdf|proof of wipe|wipe proof|certificate id)\b",
+        r"\b(certificates?|pdfs?|proof of wipe|wipe proof|certificate ids?)\b",
     )),
     # Route explicit whole-drive goals to guidance rather than the generic destructive-request response.
     ("operation_selection", (
@@ -45,6 +45,9 @@ _PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
     )),
     ("scan_explanation", (
         r"\b(scan|scanned|deleted entries|deleted files|hidden files|scan results|what did it find)\b",
+    )),
+    ("account_info", (
+        r"\b(who am i logged in as|who is logged in|which user is signed in|current user|signed-in user|username|account settings|my account)\b",
     )),
     ("device_info", (
         r"\b(device|drive|usb|pendrive|pen drive|capacity|filesystem|file system|connected)\b",
