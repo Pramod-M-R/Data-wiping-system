@@ -1079,8 +1079,8 @@ QJsonObject MainWindow::buildAssistantContext(const QString& question)
     auto recordMatchesQuestion = [&](const QJsonObject& record) {
         const QString fileName = record.value(QStringLiteral("fileName")).toString().trimmed();
         const QString certificateId = record.value(QStringLiteral("certificateId")).toString().trimmed();
-        return (fileName.size() >= 3 && question.contains(fileName, Qt::CaseInsensitive)) ||
-               (certificateId.size() >= 5 && question.contains(certificateId, Qt::CaseInsensitive));
+        return (fileName.size() >= 3 && questionLower.contains(fileName.toLower())) ||
+               (certificateId.size() >= 5 && questionLower.contains(certificateId.toLower()));
     };
     for (int i = records.size() - 1; i >= 0; --i) {
         if (records.at(i).isObject() && recordMatchesQuestion(records.at(i).toObject()))
