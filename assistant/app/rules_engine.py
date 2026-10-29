@@ -404,21 +404,21 @@ def answer_question(
         if details:
             if legacy:
                 answer = (
-                    "The Activity Log marks this entry as a LEGACY result. The underlying ML details saved for its hover tooltip are:\\n"
-                    f"{details}\\n\\n"
+                    "The Activity Log marks this entry as a LEGACY result. The underlying ML details saved for its hover tooltip are:\n"
+                    f"{details}\n\n"
                     "These are historical values, not a validated current ML evaluation. They can explain what the old tooltip displayed, "
                     "but should not be presented as a current score. A new operation is needed for updated analysis."
                 )
             else:
                 answer = (
-                    "The ML details saved with the relevant Activity Log record are:\\n"
-                    f"{details}\\n\\n"
+                    "The ML details saved with the relevant Activity Log record are:\n"
+                    f"{details}\n\n"
                     "These are application-recorded outputs from the operation, not an independent recalculation by the assistant."
                 )
         else:
-            answer = f"Recorded ML summary from Activity Log:\\n{summary}"
+            answer = f"Recorded ML summary from Activity Log:\n{summary}"
             if legacy:
-                answer += "\\nThis row is marked legacy; treat the summary as historical, not a validated current score."
+                answer += "\nThis row is marked legacy; treat the summary as historical, not a validated current score."
 
         return _result(
             answer,
